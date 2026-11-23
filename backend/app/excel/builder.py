@@ -46,6 +46,7 @@ class WorkbookDataset:
     df: pd.DataFrame  # clean data incl. lineage columns
     profile: dict[str, Any]
     lineage: dict[str, Any]
+    kpis: list[dict[str, Any]] = field(default_factory=list)  # approved, PRISM-evaluated KPIs
     sheet_name: str = ""
     # filled by the builder
     col_index: dict[str, int] = field(default_factory=dict)
@@ -187,7 +188,8 @@ def _row_flags(ds: WorkbookDataset) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def build_workbook(datasets: list[WorkbookDataset], source: WorkbookSource, title: str | None = None) -> bytes:
+def build_workbook(datasets: list[WorkbookDataset], source: WorkbookSource, title: str | None = None,
+                   blueprint: dict[str, Any] | None = None) -> bytes:
     buf = io.BytesIO()
     wb = xlsxwriter.Workbook(buf, {"in_memory": True, "strings_to_numbers": False, "strings_to_formulas": False, "strings_to_urls": False})
     wb.set_properties({
@@ -210,16 +212,22 @@ def build_workbook(datasets: list[WorkbookDataset], source: WorkbookSource, titl
         ds.sheet_name = safe_sheet_name("Data" if i == 0 else f"Data {i + 1}", used)
         ds.n = len(ds.df)
         sheets[ds.sheet_name] = wb.add_worksheet(ds.sheet_name)
-    for name in ("Summary", "Analysis", "Data Quality", "Lookups"):
+    has_kpis = any(d.kpis for d in datasets)
+    for name in ("Summary", *(["KPIs"] if has_kpis else []), "Analysis", "Data Quality", "Lookups",
+                 *(["Blueprint"] if blueprint else [])):
         sheets[name] = wb.add_worksheet(safe_sheet_name(name, used))
     has_excluded = any(d.lineage.get("excluded_rows") for d in datasets)
     if has_excluded:
         sheets["Excluded Rows"] = wb.add_worksheet(safe_sheet_name("Excluded Rows", used))
 
-    lookups = _write_lookups(wb, st, sheets["Lookups"], datasets)
+    lookups, lookup_counts = _write_lookups(wb, st, sheets["Lookups"], datasets)
     for ds in datasets:
         _write_data(wb, st, sheets[ds.sheet_name], ds, lookups)
     _write_summary(wb, st, sheets["Summary"], datasets)
+    if has_kpis:
+        _write_kpis(st, sheets["KPIs"], datasets, lookup_counts)
+    if blueprint:
+        _write_blueprint(st, sheets["Blueprint"], blueprint)
     _write_analysis(wb, st, sheets["Analysis"], datasets)
     _write_quality(wb, st, sheets["Data Quality"], datasets)
     if has_excluded:
@@ -227,7 +235,7 @@ def build_workbook(datasets: list[WorkbookDataset], source: WorkbookSource, titl
     src_sheets = []
     if source.kind == "xlsx" and source.original_bytes:
         src_sheets = _copy_source_sheets(wb, st, source.original_bytes, used)
-    _write_readme(st, sheets["README"], datasets, source, src_sheets, has_excluded)
+    _write_readme(st, sheets["README"], datasets, source, src_sheets, has_excluded, has_kpis, bool(blueprint))
     sheets["README"].activate()
     wb.close()
     return buf.getvalue()
@@ -348,10 +356,11 @@ def _write_data(wb, st: _Styles, ws, ds: WorkbookDataset, lookups: dict[tuple[st
 # ---------------------------------------------------------------------------
 
 
-def _write_lookups(wb, st: _Styles, ws, datasets: list[WorkbookDataset]) -> dict[tuple[str, str], str]:
+def _write_lookups(wb, st: _Styles, ws, datasets: list[WorkbookDataset]) -> tuple[dict[tuple[str, str], str], dict[tuple[str, str], str]]:
     ws.write(0, 0, "Lookups — allowed values for category columns (used by Data validation)", st.get(bold=True, font_size=13, font_color=NAVY))
     ws.write(1, 0, "Counts are live formulas (exact, case-sensitive match) over the Data sheet.", st.get(font_color=MUTED, italic=True))
     out: dict[tuple[str, str], str] = {}
+    counts: dict[tuple[str, str], str] = {}
     col = 0
     for ds in datasets:
         n = len(ds.df)
@@ -372,13 +381,14 @@ def _write_lookups(wb, st: _Styles, ws, datasets: list[WorkbookDataset]) -> dict
             if vals:
                 ws.conditional_format(4, col + 1, 3 + len(vals), col + 1, {"type": "data_bar", "bar_color": "#7FD8BE", "bar_solid": True})
                 out[(ds.sheet_name, c["key"])] = f"=Lookups!${xl_col_to_name(col)}$5:${xl_col_to_name(col)}${4 + len(vals)}"
+                counts[(ds.sheet_name, c["key"])] = f"Lookups!${xl_col_to_name(col + 1)}$5:${xl_col_to_name(col + 1)}${4 + len(vals)}"
             ws.set_column(col, col, min(max(len(c["label"]), max((len(v) for v in vals), default=8)) + 4, 40))
             ws.set_column(col + 1, col + 1, 9)
             col += 3
     if col == 0:
         ws.write(3, 0, "No category columns were detected.", st.get(font_color=MUTED))
     ws.freeze_panes(4, 0)
-    return out
+    return out, counts
 
 
 # ---------------------------------------------------------------------------
@@ -867,7 +877,8 @@ def _copy_source_sheets(wb, st: _Styles, data: bytes, used: set[str]) -> list[st
 # ---------------------------------------------------------------------------
 
 
-def _write_readme(st: _Styles, ws, datasets: list[WorkbookDataset], source: WorkbookSource, src_sheets: list[str], has_excluded: bool) -> None:
+def _write_readme(st: _Styles, ws, datasets: list[WorkbookDataset], source: WorkbookSource, src_sheets: list[str], has_excluded: bool,
+                  has_kpis: bool = False, has_blueprint: bool = False) -> None:
     ws.hide_gridlines(2)
     ws.set_column(0, 0, 3)
     ws.set_column(1, 1, 26)
@@ -897,10 +908,13 @@ def _write_readme(st: _Styles, ws, datasets: list[WorkbookDataset], source: Work
         guide.append((ds.sheet_name, f"{ds.name}: {ds.n:,} records × {len(ds.columns)} columns. Typed, cleaned data in an Excel Table with filters, validation and lineage columns (Source sheet, Source row)."))
     guide += [
         ("Summary", "Key figures as live formulas, each checked against PRISM's independent computation."),
+        *([("KPIs", "Approved Blueprint KPIs: live formula, PRISM's DuckDB value, check, and the exact SQL used.")] if has_kpis else []),
         ("Analysis", "Monthly trends and cross-tabulations (COUNTIFS / SUMIFS), with charts."),
         ("Data Quality", "Quality score, column profiles, reconciliation with source totals, and issues."),
         ("Lookups", "Allowed values for category columns; used by drop-down validation in the Data sheet."),
     ]
+    if has_blueprint:
+        guide.append(("Blueprint", "The approved interpretation: column meanings, applied operations, relationships and assumptions."))
     if has_excluded:
         guide.append(("Excluded Rows", "Titles, totals, notes and blank rows from the source that are not data records."))
     for s in src_sheets:
@@ -938,3 +952,170 @@ def _write_readme(st: _Styles, ws, datasets: list[WorkbookDataset], source: Work
     ):
         ws.write(r, 2, "• " + ln, st.text(ln, text_wrap=True))
         r += 1
+
+
+# ---------------------------------------------------------------------------
+# KPIs (from the approved Blueprint)
+# ---------------------------------------------------------------------------
+
+KPI_FMT = {"lak": '#,##0 "₭"', "duration": "[h]:mm:ss", "percent": "0.0%", "number": "#,##0.##"}
+
+
+def _xl_str(v: str) -> str:
+    return '"' + v.replace('"', '""') + '"'
+
+
+def kpi_formula(k: dict[str, Any], ds: WorkbookDataset, lookup_counts: dict[tuple[str, str], str]) -> str | None:
+    """Excel formula for a KPI, or None when no portable, exact formula exists.
+
+    Durations live in the Data sheet as Excel time values (days), so duration sums and
+    averages come out in days and display with [h]:mm:ss without further scaling.
+    """
+    n = max(ds.n, 1)
+    src = _rng(ds.sheet_name, ds.col_index["_source_row"], 1, n)
+    rng = _rng(ds.sheet_name, ds.col_index[k["column"]], 1, n) if k.get("column") in ds.col_index else None
+    cond = None
+    f = k.get("filter")
+    if f:
+        if f["column"] not in ds.col_index:
+            return None
+        frng = _rng(ds.sheet_name, ds.col_index[f["column"]], 1, n)
+        ftype = next((c["logical_type"] for c in ds.columns if c["key"] == f["column"]), "text")
+        if ftype == "boolean":
+            terms = [f"({frng}={'TRUE' if v == 'True' else 'FALSE'})" for v in f["values"]]
+        else:
+            terms = [f"EXACT({frng},{_xl_str(v)})" for v in f["values"]]
+        cond = "(" + "+".join(terms) + ")"
+    a = k["aggregation"]
+    if a == "count_rows":
+        return f"=SUMPRODUCT({cond}*1)" if cond else f"=COUNT({src})"
+    if a == "share_of_rows":
+        return f"=IFERROR(SUMPRODUCT({cond}*1)/COUNT({src}),0)" if cond else None
+    if rng is None:
+        return None
+    if a == "count_distinct":
+        lc = lookup_counts.get((ds.sheet_name, k["column"]))
+        return f'=COUNTIF({lc},">0")' if lc and not cond else None
+    if a == "sum":
+        return f"=SUMPRODUCT({cond}*{rng})" if cond else f"=SUM({rng})"
+    if a == "average":
+        if cond:
+            return f'=IFERROR(SUMPRODUCT({cond}*{rng})/SUMPRODUCT({cond}*ISNUMBER({rng})),"")'
+        return f'=IFERROR(AVERAGE({rng}),"")'
+    if a in ("minimum", "maximum"):
+        return None if cond else f"={'MIN' if a == 'minimum' else 'MAX'}({rng})"
+    return None
+
+
+def _write_kpis(st: _Styles, ws, datasets: list[WorkbookDataset], lookup_counts: dict[tuple[str, str], str]) -> None:
+    ws.set_column(0, 0, 36)
+    ws.set_column(1, 3, 16)
+    ws.set_column(4, 4, 4)
+    ws.set_column(5, 5, 44)
+    ws.set_column(6, 6, 90)
+    ws.write(0, 0, "KPIs", st.get(bold=True, font_size=16, font_color=NAVY))
+    ws.write(1, 0, "Each KPI is a live formula over the Data sheet, checked against the value PRISM computed with DuckDB "
+                   "(the exact SQL is shown). Where no exact portable formula exists, only the PRISM value is shown.",
+             st.get(font_color=MUTED, italic=True))
+    hdr = st.get(bold=True, font_color="#FFFFFF", bg_color=NAVY, text_wrap=True)
+    r = 3
+    for ds in datasets:
+        if not ds.kpis:
+            continue
+        ws.write(r, 0, ds.name, st.text(ds.name, bold=True, font_size=13, font_color=NAVY))
+        r += 1
+        for j, h in enumerate(["KPI", "Value (formula)", "PRISM value", "Check", "", "Definition", "SQL (DuckDB)"]):
+            ws.write(r, j, h, hdr)
+        r += 1
+        label_of = {c["key"]: c["label"] for c in ds.columns}
+        for k in ds.kpis:
+            fmt_s = KPI_FMT.get(k.get("format") or "number", "#,##0.##")
+            scale = 86400.0 if k.get("format") == "duration" else 1.0
+            v = k.get("value")
+            ws.write(r, 0, k["name"], st.text(k["name"], bold=True))
+            formula = kpi_formula(k, ds, lookup_counts)
+            if formula:
+                ws.write_formula(r, 1, formula, st.get(num_format=fmt_s, bold=True), (v / scale) if v is not None else "")
+            else:
+                ws.write(r, 1, "PRISM value →", st.get(font_color=MUTED, italic=True))
+            if v is not None:
+                ws.write_number(r, 2, v / scale, st.get(num_format=fmt_s, font_color=MUTED))
+            if formula:
+                _check(ws, st, r, 1, 2, 3)
+            definition = k["aggregation"].replace("_", " ")
+            if k.get("column"):
+                definition += f" of {label_of.get(k['column'], k['column'])}"
+            flt = k.get("filter")
+            if flt:
+                definition += f" where {label_of.get(flt['column'], flt['column'])} is " + " or ".join(flt["values"])
+            ws.write(r, 5, definition, st.text(definition))
+            sql = k.get("sql") or ""
+            ws.write(r, 6, sql, st.text(sql, font_color=MUTED))
+            r += 1
+        r += 2
+
+
+def _write_blueprint(st: _Styles, ws, bp: dict[str, Any]) -> None:
+    ws.set_column(0, 1, 32)
+    ws.set_column(2, 5, 14)
+    ws.set_column(6, 6, 90)
+    ws.write(0, 0, "Blueprint", st.get(bold=True, font_size=16, font_color=NAVY))
+    g = bp.get("generator", {})
+    engine = f"AI-assisted interpretation ({g.get('model')})" if g.get("engine") == "ai" else "deterministic rules"
+    ws.write(1, 0, f"Generated by {engine} and reviewed by a user before it was applied. AI proposals were validated "
+                   "against the data; numbers are never produced by AI.", st.get(font_color=MUTED, italic=True))
+    d = bp.get("domain", {})
+    ws.write(3, 0, "Domain", st.get(bold=True))
+    ws.write(3, 1, d.get("label", ""), st.text(d.get("label", ""), bold=True, font_color=NEBULA))
+    ws.write_number(3, 3, d.get("confidence", 0), st.get(num_format="0%"))
+    ws.write(3, 6, d.get("rationale", ""), st.text(d.get("rationale", "")))
+    hdr = st.get(bold=True, font_color="#FFFFFF", bg_color=NAVY)
+    r = 5
+    for plan in bp.get("datasets", []):
+        ws.write(r, 0, plan.get("title", ""), st.text(plan.get("title", ""), bold=True, font_size=13, font_color=NAVY))
+        r += 1
+        if plan.get("summary"):
+            ws.write(r, 0, plan["summary"], st.text(plan["summary"], font_color=MUTED))
+            r += 1
+        for j, h in enumerate(["Original header", "Name", "Role", "Confidence", "Origin", "Status", "Description / rationale"]):
+            ws.write(r, j, h, hdr)
+        r += 1
+        for c in plan.get("columns", []):
+            for j, v in enumerate([c["original_label"], c["display_name"], c["semantic_role"].replace("_", " ")]):
+                ws.write(r, j, v, st.text(v))
+            ws.write_number(r, 3, c["confidence"], st.get(num_format="0%"))
+            ws.write(r, 4, c["origin"], st.get(font_color=NEBULA if c["origin"] == "ai" else INK))
+            ws.write(r, 5, c["status"])
+            txt = c.get("description") or c.get("rationale") or ""
+            ws.write(r, 6, txt, st.text(txt))
+            r += 1
+        if plan.get("operations"):
+            r += 1
+            for j, h in enumerate(["Operation", "", "Kind", "Confidence", "Origin", "Status", "Rationale"]):
+                ws.write(r, j, h, hdr)
+            r += 1
+            for o in plan["operations"]:
+                ws.write(r, 0, o["title"], st.text(o["title"]))
+                ws.write(r, 2, o["spec"]["op"].replace("_", " "))
+                ws.write_number(r, 3, o["confidence"], st.get(num_format="0%"))
+                ws.write(r, 4, o["origin"], st.get(font_color=NEBULA if o["origin"] == "ai" else INK))
+                ws.write(r, 5, o["status"], st.get(bold=o["status"] == "approved"))
+                ws.write(r, 6, o.get("rationale", ""), st.text(o.get("rationale", "")))
+                r += 1
+        r += 2
+    if bp.get("relationships"):
+        ws.write(r, 0, "Relationships", st.get(bold=True, font_size=12, font_color=NAVY))
+        r += 1
+        for rel in bp["relationships"]:
+            txt = f"dataset {rel['from_dataset']}.{rel['from_column']} → dataset {rel['to_dataset']}.{rel['to_column']} · {rel['match_ratio']:.0%} of values match · {rel['status']}"
+            ws.write(r, 0, txt, st.text(txt))
+            ws.write(r, 6, rel.get("rationale", ""), st.text(rel.get("rationale", "")))
+            r += 1
+        r += 1
+    if bp.get("assumptions"):
+        ws.write(r, 0, "Assumptions", st.get(bold=True, font_size=12, font_color=NAVY))
+        r += 1
+        for a in bp["assumptions"]:
+            ws.write(r, 0, f"{a['status']} · {a['origin']} · {a['confidence']:.0%}", st.get(font_color=MUTED))
+            ws.write(r, 6, a["text"], st.text(a["text"]))
+            r += 1

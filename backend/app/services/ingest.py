@@ -137,15 +137,30 @@ def generate_workbook(db: Session, src: Source, user_id: int | None) -> Artifact
     datasets = db.execute(select(Dataset).where(Dataset.source_id == src.id).order_by(Dataset.table_index)).scalars().all()
     if not datasets:
         raise NotFound("Source has no datasets.")
+    from app.blueprint.context import DatasetContext
+    from app.blueprint.kpi import evaluate_kpis
+    from app.blueprint.service import latest_applied
+
+    bp = latest_applied(db, src.id)
+    plans = {p.dataset_id: p for p in bp.datasets} if bp else {}
     wds = []
     version_ids = []
     for ds in datasets:
         v = current_version(db, ds)
         version_ids.append(v.id)
         df = storage.read_parquet(v.clean_path)
-        wds.append(WorkbookDataset(name=ds.name, columns=v.columns, df=df, profile=v.profile, lineage=v.lineage))
+        kpis: list[dict] = []
+        if ds.id in plans:
+            # KPI values are recomputed on exactly the data written to this workbook
+            approved = [k for k in plans[ds.id].kpis if k.status == "approved"]
+            ctx = DatasetContext(dataset_id=ds.id, version=v.version, version_id=v.id, name=ds.name, columns=v.columns,
+                                 profile=v.profile, lineage=v.lineage, df=df)
+            evaluate_kpis(approved, ctx)
+            kpis = [k.model_dump(mode="json") for k in approved if k.status == "approved"]
+        wds.append(WorkbookDataset(name=ds.name, columns=v.columns, df=df, profile=v.profile, lineage=v.lineage, kpis=kpis))
     original = storage.read_bytes(src.storage_path) if src.kind == "xlsx" else None
-    data = build_workbook(wds, WorkbookSource(src.filename, src.kind, src.sha256, src.size_bytes, original))
+    data = build_workbook(wds, WorkbookSource(src.filename, src.kind, src.sha256, src.size_bytes, original),
+                          blueprint=bp.model_dump(mode="json") if bp else None)
     stamp = datetime.now(ZoneInfo(get_settings().timezone)).strftime("%Y%m%d-%H%M")
     base = src.filename.rsplit(".", 1)[0] if "." in src.filename else src.filename
     fname = safe_filename(f"PRISM_{base}_{stamp}.xlsx")

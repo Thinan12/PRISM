@@ -28,8 +28,13 @@ class Settings(BaseSettings):
     admin_password: str | None = None
     # AI
     anthropic_api_key: str | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
-    ai_model: str = "claude-sonnet-5-5"
-    ai_timeout_seconds: float = 60.0
+    ai_model: str = "claude-opus-5-5"
+    ai_effort: str = "medium"  # low | medium | high | xhigh | max
+    ai_max_retries: int = 2  # extra attempts when the model's JSON fails validation
+    ai_timeout_seconds: float = 180.0
+    # send bounded, masked example values (samples, frequent values) to the AI; when false
+    # only schema metadata and statistics leave the server
+    ai_send_values: bool = True
     # rate limiting (requests per minute per client for auth endpoints)
     auth_rate_per_minute: int = 20
 

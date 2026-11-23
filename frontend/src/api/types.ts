@@ -182,3 +182,92 @@ export interface Rows {
   limit: number;
   layer: "clean" | "raw";
 }
+
+// ---------------- Blueprint (Phase 2) ----------------
+export type Origin = "rules" | "ai" | "user";
+export type ItemStatus = "proposed" | "approved" | "rejected";
+
+export interface ColumnPlan {
+  key: string;
+  original_label: string;
+  display_name: string;
+  description: string;
+  semantic_role: string;
+  confidence: number;
+  rationale: string;
+  origin: Origin;
+  status: ItemStatus;
+}
+
+export interface Kpi {
+  id: string;
+  name: string;
+  description: string;
+  aggregation: string;
+  column: string | null;
+  filter: { column: string; values: string[] } | null;
+  format: "number" | "lak" | "duration" | "percent";
+  confidence: number;
+  rationale: string;
+  origin: Origin;
+  status: ItemStatus;
+  sql: string | null;
+  value: number | null;
+  computed_on_version: number | null;
+}
+
+export interface OperationItem {
+  id: string;
+  spec:
+    | { op: "map_values"; column: string; mappings: { to: string; variants: string[]; rows_affected: number | null }[] }
+    | { op: "remove_duplicate_rows"; rows_affected: number | null }
+    | { op: "exclude_column"; column: string }
+    | { op: "cast_column"; column: string; to_type: string };
+  title: string;
+  rationale: string;
+  confidence: number;
+  origin: Origin;
+  status: ItemStatus;
+}
+
+export interface DatasetPlan {
+  dataset_id: number;
+  version: number;
+  title: string;
+  summary: string;
+  columns: ColumnPlan[];
+  operations: OperationItem[];
+  kpis: Kpi[];
+}
+
+export interface BlueprintContent {
+  source_id: number;
+  domain: { label: string; confidence: number; rationale: string; origin: Origin };
+  datasets: DatasetPlan[];
+  relationships: { id: string; from_dataset: number; from_column: string; to_dataset: number; to_column: string; match_ratio: number; verified: boolean; rationale: string; confidence: number; origin: Origin; status: ItemStatus }[];
+  dashboard: { id: string; title: string; chart: string; dataset_id: number; kpi_ids: string[]; dimension: string | null; time_column: string | null; origin: Origin; status: ItemStatus }[];
+  assumptions: { id: string; text: string; confidence: number; origin: Origin; status: ItemStatus }[];
+  generator: { engine: "rules" | "ai"; model: string | null; attempts: number; fallback_reason: string | null; warnings: string[] };
+}
+
+export interface BlueprintRecord {
+  id: number;
+  source_id: number;
+  number: number;
+  status: "draft" | "applied" | "superseded";
+  engine: "rules" | "ai";
+  requirements: string | null;
+  created_at: string;
+  applied_at: string | null;
+  result: { datasets: { dataset_id: number; version: number; row_count: number }[]; artifact_id: number; unreviewed_items_skipped: number } | null;
+  content: BlueprintContent;
+}
+
+export type EditTarget = "column" | "operation" | "kpi" | "relationship" | "assumption" | "panel" | "blueprint";
+export interface BlueprintEdit {
+  action: "approve" | "reject" | "remove" | "update" | "add" | "approve_all";
+  target: EditTarget;
+  dataset_id?: number;
+  id?: string;
+  changes?: Record<string, unknown>;
+}

@@ -18,5 +18,12 @@ Interactive OpenAPI documentation: `/api/docs` (spec: `/api/openapi.json`). All 
 | GET | `/workspaces/{ws}/datasets/{id}/rows?offset&limit&layer=clean\|raw` | viewer | paged rows (limit ≤ 1000) |
 | GET | `/workspaces/{ws}/artifacts/{id}/download` | viewer | download a workbook (audited) |
 | GET | `/workspaces/{ws}/audit` | admin | audit events |
+| GET | `/workspaces/{ws}/ai-status` | viewer | whether AI interpretation is configured, and the model |
+| POST | `/workspaces/{ws}/sources/{id}/blueprints` | editor | `{requirements?}` → job that generates a Blueprint (AI with rule-based fallback) |
+| GET | `/workspaces/{ws}/sources/{id}/blueprint` | viewer | latest non-superseded Blueprint, or `null` |
+| GET | `/workspaces/{ws}/sources/{id}/blueprints` | viewer | Blueprint history |
+| GET | `/workspaces/{ws}/blueprints/{id}` | viewer | one Blueprint |
+| PATCH | `/workspaces/{ws}/blueprints/{id}` | editor | `{edits: [{action, target, dataset_id?, id?, changes?}]}`; actions `approve`, `reject`, `remove`, `update`, `add` (KPI), `approve_all`; drafts only |
+| POST | `/workspaces/{ws}/blueprints/{id}/apply` | editor | job: approved operations → new dataset versions + regenerated workbook (409 if not a draft or the data changed) |
 
 Objects belonging to other workspaces always return 404, so their existence is not revealed.

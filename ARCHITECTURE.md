@@ -76,6 +76,7 @@ proposals) and is validated before use.
 | `ingestion/typing.py` | per-column type inference + conversion with failure tracking |
 | `profiling/` | column/dataset profiles and quality issues |
 | `excel/builder.py` | workbook generation (README, Data, Summary, Data Quality, Lookups, Analysis, Source copies) |
+| `blueprint/` | Phase 2: `schema` (Pydantic Blueprint), `rules` (deterministic generator), `ai` (Claude interpreter), `merge` (validate AI against data), `kpi` (KPI → DuckDB SQL), `executor` (approved ops → new version), `service` (lifecycle) |
 | `services/` | orchestration: ingest pipeline, storage, audit |
 | `api/` | REST routers (`/api/v1`) |
 | `worker.py` | job runner |
@@ -86,6 +87,7 @@ proposals) and is validated before use.
 - `sources` — uploaded file / pasted text: sha256, kind, original name, storage path, size
 - `datasets` — one per detected table; belongs to workspace + source
 - `dataset_versions` — immutable: version no, schema (columns), profile, quality, lineage, parquet paths
+- `blueprints` — per source, numbered; status draft → applied | superseded; engine rules | ai; full Blueprint JSON
 - `jobs` — type, status (queued|running|succeeded|failed), payload, result, error, attempts
 - `artifacts` — generated files (workbooks) linked to dataset version
 - `audit_events` — actor, workspace, action, target, details, timestamp
@@ -98,6 +100,37 @@ from the authenticated membership; cross-workspace IDs return 404.
 Every clean row carries `_prism_row` (stable row id), `_source_sheet`, `_source_row`
 (1-based original row number). Excluded rows (total/footer rows) are never dropped silently:
 they are stored in the version's lineage and written to an *Excluded Rows* sheet.
+
+## 3a. Blueprint (Phase 2)
+
+```
+current dataset versions ─▶ rules engine (always) ──────────────┐
+          │                                                       ▼
+          └─▶ profile-only payload ─▶ Claude (JSON schema) ─▶ Pydantic ─▶ merge: validate vs data ─▶ Blueprint (draft)
+                 (bounded, masked)       retry if invalid          │ failure / refusal / no key → rules only (reason recorded)
+                                                                   ▼
+          user edits (approve / reject / rename / remove / modify / add KPI) ─▶ apply job
+                                                                   ▼
+          approved ops only ─▶ new dataset versions (lineage) ─▶ KPIs re-evaluated (DuckDB) ─▶ workbook (KPIs + Blueprint sheets)
+```
+
+**ADR-3 — the AI proposes, the data disposes.** Claude (default `claude-opus-5-5`, effort `medium`,
+structured outputs, server-side refusal fallback) only *interprets*; its output schema contains no
+numbers that PRISM reports. Every proposal is re-checked: unknown columns and values are dropped,
+KPIs must compile to valid SQL for the column types, value mappings must reference existing values,
+and relationships are kept only when PRISM measures at least 50 % value overlap. Each drop is
+recorded as a warning on the Blueprint. Any AI failure falls back to the deterministic rules engine,
+so PRISM works without a key. `PRISM_AI_SEND_VALUES=false` restricts the payload to schema and
+statistics; phone numbers are always masked.
+
+**ADR-4 — KPIs are declarative.** A KPI is `{aggregation, column, filter}` — never free SQL — compiled
+to parameterized DuckDB SQL (identifiers quoted from validated keys, values bound as parameters) and
+to an equivalent Excel formula. The stored display SQL gives provenance; the workbook's KPI sheet
+checks each formula against the DuckDB value.
+
+Operations (`map_values`, `remove_duplicate_rows`, `exclude_column`, `cast_column`) run only when
+approved, in a fixed order, and produce a new immutable dataset version; removed rows are listed in
+lineage and earlier versions stay readable.
 
 ## 4. Localization
 

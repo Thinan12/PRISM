@@ -6,6 +6,7 @@ import { useRegenerate, useSources } from "../api/hooks";
 import type { Dataset, Source } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { CommandPalette, type Command } from "../components/CommandPalette";
+import { BlueprintView } from "../components/BlueprintView";
 import { DataPreview } from "../components/DataPreview";
 import { Inspector } from "../components/Inspector";
 import { PrismMark } from "../components/PrismMark";
@@ -15,14 +16,14 @@ import { SourceExplorer, StatusPill } from "../components/SourceExplorer";
 import { UploadPanel } from "../components/UploadPanel";
 import { fmtBytes, fmtInt } from "../lib/format";
 
-type Tab = "map" | "data" | "quality";
+type Tab = "map" | "blueprint" | "data" | "quality";
 
 export function Workspace() {
   const { user, logout } = useAuth();
   const [wsId, setWsId] = useState<number | undefined>(user?.workspaces[0]?.id);
   const ws = user?.workspaces.find((w) => w.id === wsId);
   const canEdit = ws?.role === "admin" || ws?.role === "editor";
-  const { data: sources = [], error: sourcesError } = useSources(wsId);
+  const { data: sources = [], error: sourcesError, isSuccess: sourcesLoaded } = useSources(wsId);
   const [sourceId, setSourceId] = useState<number>();
   const [datasetId, setDatasetId] = useState<number>();
   const [tab, setTab] = useState<Tab>("map");
@@ -85,6 +86,7 @@ export function Workspace() {
     if (latestWorkbook) cmds.push({ id: "dl", group: "Actions", label: `Download workbook — ${latestWorkbook.filename}`, run: download });
     if (source) {
       cmds.push({ id: "t-map", group: "View", label: "Schema Map", run: () => setTab("map") });
+      cmds.push({ id: "t-bp", group: "View", label: "Blueprint", run: () => setTab("blueprint") });
       if (datasets.length) {
         cmds.push({ id: "t-data", group: "View", label: "Data", run: () => setTab("data") });
         cmds.push({ id: "t-q", group: "View", label: "Quality", run: () => setTab("quality") });
@@ -100,7 +102,8 @@ export function Workspace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sources, source, datasets.length, canEdit, latestWorkbook, user, wsId]);
 
-  const showUpload = adding || (sources.length === 0 && !sourcesError);
+  // only an empty workspace that has finished loading shows the upload hero (no flash while loading)
+  const showUpload = adding || (sourcesLoaded && sources.length === 0);
 
   return (
     <div className={`shell ${tab !== "map" || showUpload ? "no-inspector" : ""}`}>
@@ -145,14 +148,16 @@ export function Workspace() {
               {adding && sources.length > 0 && <button className="btn btn-ghost" style={{ marginTop: 12 }} onClick={() => setAdding(false)}>Cancel</button>}
             </motion.div>
           </div>
+        ) : !sourcesLoaded && !sourcesError ? (
+          <div className="faint" style={{ padding: 24 }} role="status">Loading workspace…</div>
         ) : source ? (
           <>
             {source.status === "ready" && (
               <div className="canvas-tabs" role="tablist">
-                {([["map", "Schema Map"], ["data", "Data"], ["quality", "Quality"]] as [Tab, string][]).map(([k, l]) => (
+                {([["map", "Schema Map"], ["blueprint", "Blueprint"], ["data", "Data"], ["quality", "Quality"]] as [Tab, string][]).map(([k, l]) => (
                   <button key={k} role="tab" className="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{l}</button>
                 ))}
-                {tab !== "map" && datasets.length > 1 && (
+                {(tab === "data" || tab === "quality") && datasets.length > 1 && (
                   <select className="input" style={{ width: "auto", marginLeft: "auto", height: 30, padding: "0 8px", alignSelf: "center" }} value={activeDs?.id} onChange={(e) => setDatasetId(Number(e.target.value))} aria-label="Table">
                     {datasets.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                   </select>
@@ -180,6 +185,7 @@ export function Workspace() {
               {source.status === "ready" && !dsLoading && tab === "map" && <SchemaMap source={source} datasets={datasets} selection={selection} onSelect={setSelection} />}
               {source.status === "ready" && tab === "data" && activeDs && wsId && <DataPreview key={activeDs.id} ws={wsId} ds={activeDs} />}
               {source.status === "ready" && tab === "quality" && activeDs && <QualityView ds={activeDs} />}
+              {source.status === "ready" && tab === "blueprint" && wsId && <BlueprintView key={source.id} ws={wsId} source={source} canEdit={canEdit} />}
             </div>
           </>
         ) : null}

@@ -126,6 +126,24 @@ class Artifact(TimestampMixin, Base):
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
 
+class BlueprintRecord(TimestampMixin, Base):
+    __tablename__ = "blueprints"
+    __table_args__ = (UniqueConstraint("source_id", "number"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id", ondelete="CASCADE"), index=True)
+    number: Mapped[int] = mapped_column(Integer)  # 1, 2, … per source
+    status: Mapped[str] = mapped_column(String(16), default="draft")  # draft | applied | superseded
+    engine: Mapped[str] = mapped_column(String(16))  # rules | ai
+    content: Mapped[dict[str, Any]] = mapped_column(JSONType)
+    requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    applied_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+
+
 class Job(TimestampMixin, Base):
     __tablename__ = "jobs"
     __table_args__ = (Index("ix_jobs_status_created", "status", "created_at"),)

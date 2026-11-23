@@ -88,3 +88,17 @@ export const TYPE_META: Record<LogicalType, { glyph: string; label: string; colo
   phone: { glyph: "☏", label: "Phone", color: "var(--t-phone)" },
   empty: { glyph: "∅", label: "Empty", color: "var(--t-empty)" },
 };
+
+export function fmtKpi(k: { value: number | null; format: "number" | "lak" | "duration" | "percent" }): string {
+  if (k.value == null) return "—";
+  switch (k.format) {
+    case "lak":
+      return fmtLAK(k.value);
+    case "duration":
+      return fmtDuration(k.value);
+    case "percent":
+      return `${fmtNumber(k.value * 100)}%`;
+    default:
+      return Number.isInteger(k.value) ? fmtInt(k.value) : fmtNumber(k.value);
+  }
+}

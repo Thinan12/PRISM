@@ -10,4 +10,8 @@
 - **Source-sheet copies** in the workbook keep values and common formatting (fonts, fills, merges, widths, number formats) but not original formulas, charts or conditional formats. Sheets above 2M cells are not copied.
 - **Re-uploading the same file** creates a new source; the SHA-256 is stored but duplicate uploads are not yet flagged.
 - **Performance:** 100k rows ingest in about 12–19 s (detection and typing run in Python). That is acceptable as a background job; vectorised typing is a planned optimisation.
-- **Phases 2–5** (Blueprint, analytics and natural-language questions, Google Sheets sync, enterprise administration, sharing, scheduling, PWA) are not implemented yet. See [PROGRESS.md](../PROGRESS.md).
+- **AI Blueprint path** is tested with a mocked Anthropic client (valid output, retry after invalid output, persistently invalid output, refusal, network error, no key). It has **not** been run against the live API because no credentials were available during development; the rule-based path is fully exercised end to end. Example values sent to the AI can be disabled with `PRISM_AI_SEND_VALUES=false`; phone numbers are always masked.
+- **Blueprint operations** are limited to value mapping, duplicate removal, column exclusion and type casting. Filling missing values and derived columns are deliberately not offered (no fabricated values).
+- **KPI formulas in Excel**: distinct counts use the Lookups sheet (category columns only); filtered min/max and distinct counts on other columns show the PRISM value without a live formula.
+- **Dashboard plan** is stored in the Blueprint but is rendered only from Phase 3.
+- **Phases 3–5** (analytics and natural-language questions, Google Sheets sync, enterprise administration, sharing, scheduling, PWA) are not implemented yet. See [PROGRESS.md](../PROGRESS.md).

@@ -23,3 +23,15 @@ describe("format", () => {
     expect(fmtValue({ logical_type: "text", unit: null }, null)).toBe("");
   });
 });
+
+import { fmtKpi } from "../lib/format";
+
+describe("fmtKpi", () => {
+  it("formats KPI values by kind", () => {
+    expect(fmtKpi({ value: 274000, format: "lak" })).toBe("274,000 ₭");
+    expect(fmtKpi({ value: 45618, format: "duration" })).toBe("12:40:18");
+    expect(fmtKpi({ value: 0.3443, format: "percent" })).toBe("34.43%");
+    expect(fmtKpi({ value: 61, format: "number" })).toBe("61");
+    expect(fmtKpi({ value: null, format: "number" })).toBe("—");
+  });
+});
