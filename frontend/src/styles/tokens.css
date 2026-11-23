@@ -1,0 +1,43 @@
+/* Night Observatory — design tokens (see ARCHITECTURE.md §6) */
+:root {
+  --deep-space: #060912;
+  --hull-1: #0c1220;
+  --hull-2: #121a2c;
+  --hull-3: #1a2439;
+  --hull-line: #24304a;
+  --hull-line-soft: #1a2338;
+  --starlight: #e8edf7;
+  --starlight-dim: #8d99b3;
+  --starlight-faint: #5b6782;
+  --aurora: #3ee6b0;
+  --aurora-dim: rgba(62, 230, 176, 0.14);
+  --ember: #ff8b4d;
+  --ember-dim: rgba(255, 139, 77, 0.14);
+  --nebula: #a98bff;
+  --nebula-dim: rgba(169, 139, 255, 0.14);
+  --flare: #ff5470;
+  --flare-dim: rgba(255, 84, 112, 0.14);
+  --comet: #6cb6ff;
+
+  --font-display: "Bricolage Grotesque", "Noto Sans Lao", system-ui, sans-serif;
+  --font-ui: "Schibsted Grotesk", "Noto Sans Lao", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Noto Sans Lao", ui-monospace, monospace;
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 16px;
+  --shadow-hull: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 32px -16px rgba(0, 0, 0, 0.7);
+  --focus: 0 0 0 2px var(--deep-space), 0 0 0 4px var(--aurora);
+  color-scheme: dark;
+}
+
+/* type glyph colours (column logical types) */
+:root {
+  --t-text: #c3cbe0;
+  --t-number: #6cb6ff;
+  --t-date: #f5c96a;
+  --t-duration: #3ee6b0;
+  --t-phone: #9fd7ff;
+  --t-boolean: #ff9ecb;
+  --t-empty: #5b6782;
+}

@@ -1,0 +1,33 @@
+{
+	# Set PRISM_DOMAIN to a real hostname to get automatic HTTPS; ":80" serves plain HTTP on the LAN.
+	admin off
+}
+
+{$PRISM_DOMAIN::80} {
+	encode zstd gzip
+	request_body {
+		max_size 210MB
+	}
+
+	handle /api/* {
+		reverse_proxy api:8000 {
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy same-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+}

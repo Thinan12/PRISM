@@ -1,0 +1,78 @@
+# PRISM production deployment:  cp .env.example .env  (edit it)  &&  docker compose up -d --build
+# Only the proxy publishes ports; postgres, api and worker are reachable only on the internal network.
+name: prism
+
+x-backend: &backend
+  build: ./backend
+  env_file: .env
+  environment:
+    PRISM_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-prism}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-prism}
+    PRISM_DATA_DIR: /data
+    PRISM_ENV: production
+    PRISM_JOBS_MODE: external
+  volumes:
+    - prism-data:/data
+  networks: [internal]
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-prism}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-prism}
+      TZ: Asia/Vientiane
+    volumes:
+      - prism-db:/var/lib/postgresql/data
+    networks: [internal]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      db: { condition: service_healthy }
+
+  api:
+    <<: *backend
+    depends_on:
+      db: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.worker"]
+    healthcheck:
+      disable: true
+    depends_on:
+      db: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
+  proxy:
+    build: ./frontend
+    environment:
+      PRISM_DOMAIN: ${PRISM_DOMAIN:-:80}
+    ports:
+      - "${PRISM_HTTP_PORT:-80}:80"
+      - "${PRISM_HTTPS_PORT:-443}:443"
+    volumes:
+      - caddy-data:/data
+    networks: [internal]
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+
+volumes:
+  prism-db:
+  prism-data:
+  caddy-data:
+
+networks:
+  internal:
