@@ -64,7 +64,7 @@ export function useRegenerate(ws: number | undefined) {
 export function useAiStatus(ws: number | undefined) {
   return useQuery({
     queryKey: ["ai-status", ws],
-    queryFn: () => api<{ configured: boolean; model: string }>(`/workspaces/${ws}/ai-status`),
+    queryFn: () => api<AiStatus>(`/workspaces/${ws}/ai-status`),
     enabled: !!ws,
     staleTime: 300_000,
   });
@@ -80,11 +80,13 @@ export function useBlueprint(ws: number | undefined, sourceId: number | undefine
 
 async function waitForJob(ws: number, job: Job): Promise<Job> {
   let j = job;
-  for (let i = 0; i < 600 && (j.status === "queued" || j.status === "running"); i++) {
-    await new Promise((r) => setTimeout(r, 1000));
+  // local AI models on CPU-only servers can take many minutes; poll for up to an hour
+  for (let i = 0; i < 1900 && (j.status === "queued" || j.status === "running"); i++) {
+    await new Promise((r) => setTimeout(r, i < 60 ? 1000 : 2000));
     j = await api<Job>(`/workspaces/${ws}/jobs/${j.id}`);
   }
   if (j.status === "failed") throw new ApiError(422, "job_failed", j.error ?? "The job failed.");
+  if (j.status !== "succeeded") throw new ApiError(504, "job_timeout", "The job is still running. Refresh the page later to see the result.");
   return j;
 }
 
@@ -123,3 +125,11 @@ export function useApplyBlueprint(ws: number | undefined, sourceId: number | und
     },
   });
 }
+
+export type AiStatus = {
+  provider: "ollama" | "openai_compatible" | "anthropic" | "none";
+  model: string;
+  configured: boolean;
+  reachable: boolean | null;
+  detail: string | null;
+};

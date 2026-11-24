@@ -198,6 +198,7 @@ def _resp(text, stop="end_turn"):
 
 @pytest.fixture
 def ai_on(monkeypatch):
+    monkeypatch.setattr(get_settings(), "ai_provider", "anthropic")
     monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-test")
 
     def use(responses):
@@ -260,10 +261,183 @@ def test_ai_failures_fall_back(ai_on, contexts, response, reason):
     assert bp.generator.engine == "rules" and reason in bp.generator.fallback_reason
 
 
-def test_ai_not_configured(contexts):
+def test_ai_not_configured(contexts, monkeypatch):
+    bp = build_blueprint(SRC, contexts)  # tests run with PRISM_AI_PROVIDER=none
+    assert bp.generator.engine == "rules" and "switched off" in bp.generator.fallback_reason
+    monkeypatch.setattr(get_settings(), "ai_provider", "anthropic")
     assert not get_settings().anthropic_api_key
     bp = build_blueprint(SRC, contexts)
-    assert bp.generator.engine == "rules" and "not configured" in bp.generator.fallback_reason
+    assert bp.generator.engine == "rules" and "ANTHROPIC_API_KEY" in bp.generator.fallback_reason
+
+
+def test_provider_selection(monkeypatch):
+    s = get_settings()
+    monkeypatch.setattr(s, "ai_provider", "auto")
+    monkeypatch.setattr(s, "anthropic_api_key", None)
+    assert ai_mod.provider() == "ollama" and ai_mod.model_name() == s.ollama_model
+    monkeypatch.setattr(s, "anthropic_api_key", "sk-test")
+    assert ai_mod.provider() == "anthropic"
+    monkeypatch.setattr(s, "ai_provider", "openai_compatible")
+    assert not ai_mod.ai_configured() and "PRISM_OPENAI_BASE_URL" in ai_mod.not_configured_reason()
+    monkeypatch.setattr(s, "ai_provider", "bogus")
+    with pytest.raises(ValueError):
+        ai_mod.provider()
+
+
+# ------------------------------------------------- HTTP providers (Ollama / OpenAI-compatible)
+
+
+@pytest.fixture
+def http_on(monkeypatch):
+    """Route provider HTTP calls to a handler; returns the list of captured requests."""
+    seen = []
+
+    def use(handler):
+        def wrapped(request):
+            seen.append(request)
+            return handler(request)
+
+        monkeypatch.setattr(ai_mod, "http_factory", lambda timeout: httpx.Client(transport=httpx.MockTransport(wrapped)))
+        return seen
+
+    return use
+
+
+def _ollama_reply(text, done="stop"):
+    return httpx.Response(200, json={"model": "qwen2.5:7b", "message": {"role": "assistant", "content": text},
+                                     "done": True, "done_reason": done, "prompt_eval_count": 900, "eval_count": 400})
+
+
+def test_ollama_provider(monkeypatch, http_on, contexts):
+    monkeypatch.setattr(get_settings(), "ai_provider", "ollama")
+    good = json.dumps(_interp(*contexts), ensure_ascii=False)
+    replies = [_ollama_reply("{broken", done="stop"), _ollama_reply(good)]
+    seen = http_on(lambda req: replies.pop(0))
+    bp = build_blueprint(SRC, contexts)
+    assert bp.generator.engine == "ai" and bp.generator.model == "ollama/qwen2.5:7b" and bp.generator.attempts == 2
+    assert bp.generator.input_tokens == 1800 and bp.domain.label == "Telecom customer-service call log"
+    body = json.loads(seen[0].content)
+    assert seen[0].url.path == "/api/chat" and body["stream"] is False
+    assert body["options"]["temperature"] == 0 and body["options"]["num_predict"] == get_settings().ollama_num_predict
+    assert 8192 <= body["options"]["num_ctx"] <= 16384  # sized to the request, not the 32k maximum
+    assert "$ref" not in json.dumps(body["format"]) and body["format"]["type"] == "object"  # refs inlined
+    ds = body["format"]["properties"]["datasets"]
+    assert ds["maxItems"] == len(contexts)  # grammar bounds stop runaway output
+    assert ds["items"]["properties"]["columns"]["maxItems"] == max(len(c.columns) for c in contexts)
+    assert ds["items"]["properties"]["kpis"]["maxItems"] == 8
+    assert body["messages"][0]["role"] == "system"
+    retry = json.loads(seen[1].content)["messages"]
+    assert retry[-2] == {"role": "assistant", "content": "{broken"} and "invalid" in retry[-1]["content"]
+
+
+def test_ollama_truncated_output_restarts_fresh(monkeypatch, http_on, contexts):
+    monkeypatch.setattr(get_settings(), "ai_provider", "ollama")
+    good = json.dumps(_interp(*contexts), ensure_ascii=False)
+    replies = [_ollama_reply('{"domain": ' + "x" * 5000, done="length"), _ollama_reply(good)]
+    seen = http_on(lambda req: replies.pop(0))
+    bp = build_blueprint(SRC, contexts)
+    assert bp.generator.engine == "ai" and bp.generator.attempts == 2
+    retry = json.loads(seen[1].content)["messages"]
+    assert len(retry) == 2 and "too long" in retry[1]["content"]  # system + one user turn, no cut-off text
+    assert "x" * 100 not in seen[1].content.decode()
+
+
+def test_ollama_context_size():
+    small = [{"role": "user", "content": "x" * 1000}]
+    assert ai_mod.ollama_context_size(small, 6000, 32768) == 8192
+    huge = [{"role": "user", "content": "x" * 200_000}]
+    assert ai_mod.ollama_context_size(huge, 6000, 32768) == 32768  # capped
+    assert ai_mod.ollama_context_size(small, 100, 32768) == 4096
+
+
+@pytest.mark.parametrize("response,reason", [
+    (httpx.ConnectError("refused"), "Could not reach Ollama"),
+    (httpx.Response(404, json={"error": "model 'qwen2.5:7b' not found"}), "ollama pull"),
+    (_ollama_reply("{}", done="length"), "cut off"),
+])
+def test_ollama_failures_fall_back(monkeypatch, http_on, contexts, response, reason):
+    monkeypatch.setattr(get_settings(), "ai_provider", "ollama")
+
+    def handler(req):
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    http_on(handler)
+    bp = build_blueprint(SRC, contexts)
+    assert bp.generator.engine == "rules" and reason in bp.generator.fallback_reason
+
+
+@pytest.mark.parametrize("mode", ["schema", "object"])
+def test_openai_compatible_provider(monkeypatch, http_on, contexts, mode):
+    s = get_settings()
+    monkeypatch.setattr(s, "ai_provider", "openai_compatible")
+    monkeypatch.setattr(s, "openai_base_url", "https://llm.example/v1")
+    monkeypatch.setattr(s, "openai_api_key", "sk-x")
+    monkeypatch.setattr(s, "openai_model", "deepseek-chat")
+    monkeypatch.setattr(s, "openai_json_mode", mode)
+    text = "```json\n" + json.dumps(_interp(*contexts), ensure_ascii=False) + "\n```"
+    seen = http_on(lambda req: httpx.Response(200, json={
+        "model": "deepseek-chat", "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": text}}]}))
+    bp = build_blueprint(SRC, contexts)
+    assert bp.generator.engine == "ai" and bp.generator.model == "deepseek-chat"
+    req = seen[0]
+    body = json.loads(req.content)
+    assert str(req.url) == "https://llm.example/v1/chat/completions" and req.headers["authorization"] == "Bearer sk-x"
+    if mode == "schema":
+        assert body["response_format"]["type"] == "json_schema"
+    else:
+        assert body["response_format"] == {"type": "json_object"} and "JSON schema" in body["messages"][0]["content"]
+
+
+def test_openai_compatible_bad_key_falls_back(monkeypatch, http_on, contexts):
+    s = get_settings()
+    for k, v in {"ai_provider": "openai_compatible", "openai_base_url": "https://llm.example/v1", "openai_model": "m"}.items():
+        monkeypatch.setattr(s, k, v)
+    http_on(lambda req: httpx.Response(401, json={"error": {"message": "invalid key"}}))
+    bp = build_blueprint(SRC, contexts)
+    assert bp.generator.engine == "rules" and "rejected the API key" in bp.generator.fallback_reason
+
+
+def test_ai_status_reports_ollama(monkeypatch, http_on):
+    s = get_settings()
+    monkeypatch.setattr(s, "ai_provider", "ollama")
+    http_on(lambda req: httpx.Response(200, json={"models": [{"name": "llama3:8b", "model": "llama3:8b"}]}))
+    st = ai_mod.status()
+    assert st["provider"] == "ollama" and st["reachable"] is True and "ollama pull qwen2.5:7b" in st["detail"]
+    http_on(lambda req: httpx.Response(200, json={"models": [{"name": "qwen2.5:7b", "model": "qwen2.5:7b"}]}))
+    st = ai_mod.status()
+    assert st["configured"] and st["reachable"] and st["detail"] is None
+
+    def down(req):
+        raise httpx.ConnectError("refused")
+
+    http_on(down)
+    st = ai_mod.status()
+    assert st["reachable"] is False and "not reachable" in st["detail"]
+
+
+def test_ai_ungrounded_lao_and_breakdown_kpis_rejected(ai_on, contexts):
+    """Regressions seen live with qwen2.5:7b: invented Lao names and 'X by Y' KPIs without values."""
+    data = _interp(*contexts)
+    k = _cols(contexts[0])
+    dur = next(key for label, key in k.items() if "Duration" in label)
+    data["datasets"][0]["columns"].append({"key": dur, "display_name": "ຄວາມສຳລັບ", "description": "Call length.",
+                                           "semantic_role": "duration", "confidence": 1.0, "rationale": "x"})
+    data["datasets"][0]["kpis"].append({"name": "Calls by Branch", "description": "", "aggregation": "count_rows",
+                                        "column": None, "filter_column": k["ຂໍ້ມູນລູກຄ້າ / ສາຂາ Branch"], "filter_values": [],
+                                        "confidence": 1.0, "rationale": ""})
+    ai_on([_resp(json.dumps(data, ensure_ascii=False))])
+    bp = build_blueprint(SRC, contexts)
+    plan = bp.datasets[0]
+    col = next(c for c in plan.columns if c.key == dur)
+    assert col.display_name != "ຄວາມສຳລັບ" and "ຄວາມສຳລັບ" not in col.display_name
+    assert all(kp.name != "Calls by Branch" for kp in plan.kpis)
+    w = " ".join(bp.generator.warnings)
+    assert "does not appear in the source header" in w and "breakdowns belong in dashboard panels" in w
+    branch = next(c for c in plan.columns if c.key == k["ຂໍ້ມູນລູກຄ້າ / ສາຂາ Branch"])
+    assert branch.display_name == "ສາຂາ Branch"  # grounded Lao is accepted
 
 
 def test_ai_output_model_rejects_extra_fields(contexts):

@@ -10,6 +10,7 @@ x-backend: &backend
     PRISM_DATA_DIR: /data
     PRISM_ENV: production
     PRISM_JOBS_MODE: external
+    PRISM_OLLAMA_URL: http://ollama:11434
   volumes:
     - prism-data:/data
   networks: [internal]
@@ -55,6 +56,30 @@ services:
       db: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }
 
+  # Local AI (free, data never leaves the server). Used when PRISM_AI_PROVIDER is auto (and no
+  # ANTHROPIC_API_KEY is set) or ollama. Not published on any host port.
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    networks: [internal]
+    restart: unless-stopped
+    # NVIDIA GPU (needs the NVIDIA Container Toolkit on the host) — uncomment:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices: [{ driver: nvidia, count: all, capabilities: [gpu] }]
+
+  # one-shot: downloads PRISM_OLLAMA_MODEL on first start (a few GB), then exits
+  ollama-pull:
+    image: ollama/ollama:latest
+    entrypoint: ["ollama", "pull", "${PRISM_OLLAMA_MODEL:-qwen2.5:7b}"]
+    environment:
+      OLLAMA_HOST: ollama:11434
+    networks: [internal]
+    restart: "no"
+    depends_on: [ollama]
+
   proxy:
     build: ./frontend
     environment:
@@ -73,6 +98,7 @@ volumes:
   prism-db:
   prism-data:
   caddy-data:
+  ollama-models:
 
 networks:
   internal:

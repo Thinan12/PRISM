@@ -18,7 +18,7 @@ Interactive OpenAPI documentation: `/api/docs` (spec: `/api/openapi.json`). All 
 | GET | `/workspaces/{ws}/datasets/{id}/rows?offset&limit&layer=clean\|raw` | viewer | paged rows (limit ≤ 1000) |
 | GET | `/workspaces/{ws}/artifacts/{id}/download` | viewer | download a workbook (audited) |
 | GET | `/workspaces/{ws}/audit` | admin | audit events |
-| GET | `/workspaces/{ws}/ai-status` | viewer | whether AI interpretation is configured, and the model |
+| GET | `/workspaces/{ws}/ai-status` | viewer | `{provider, model, configured, reachable, detail}`; for Ollama also whether the server answers and has the model |
 | POST | `/workspaces/{ws}/sources/{id}/blueprints` | editor | `{requirements?}` → job that generates a Blueprint (AI with rule-based fallback) |
 | GET | `/workspaces/{ws}/sources/{id}/blueprint` | viewer | latest non-superseded Blueprint, or `null` |
 | GET | `/workspaces/{ws}/sources/{id}/blueprints` | viewer | Blueprint history |

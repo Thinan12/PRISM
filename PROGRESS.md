@@ -1,6 +1,6 @@
 # PRISM — Development Progress
 
-Last updated: 2026-11-23 (Phase 2). Status reflects what was **executed and verified**, not what exists as code.
+Last updated: 2026-11-24 (Phase 2 + pluggable AI provider). Status reflects what was **executed and verified**, not what exists as code.
 
 ## Phase 1 — Data Intelligence Foundation · ✅ complete (acceptance criterion met)
 
@@ -59,7 +59,22 @@ Test totals at this point: **backend 99 passed**, **frontend 6 passed**, **E2E p
 | Blueprint canvas UI (domain, KPI cards with SQL, operations, columns with inline rename/role, relationships, dashboard plan, assumptions; Nebula = AI-inferred) | ✅ | E2E + screenshots reviewed |
 | Live Claude API call | ⚠️ **not verified** — no API credentials on the development machine | |
 
-Test totals: **backend 115 passed**, **frontend 7 passed**, **E2E Phase 1 + Phase 2 passed**.
+### Phase 2.1 — pluggable AI provider (2026-11-24) · ✅
+
+| Capability | Status | Evidence |
+|---|---|---|
+| `PRISM_AI_PROVIDER` = auto / ollama / openai_compatible / anthropic / none; same prompt, schema, validation and fallback for all | ✅ | `test_provider_selection`, `test_ollama_*`, `test_openai_compatible_*` |
+| Ollama: schema-constrained decoding with array/string bounds (no runaway output), context window sized per request, fresh retry after a cut-off answer, total time budget | ✅ | `test_ollama_provider`, `test_ollama_truncated_output_restarts_fresh`, `test_ollama_context_size` |
+| OpenAI-compatible (DeepSeek, OpenRouter, LM Studio, vLLM): json_schema or json_object mode, bearer key, error mapping | ✅ (mocked HTTP) | `test_openai_compatible_provider`, `test_openai_compatible_bad_key_falls_back` |
+| **Live local model**: `qwen2.5:7b` via Ollama on the CPU-only dev machine produced a valid interpretation of the messy Lao call log and an `engine=ai` Blueprint | ✅ | 1 attempt, 188 s, 3,332 prompt / 2,094 output tokens (~11 tok/s generation) |
+| Extra checks found in the live run: AI names with Lao text not present in the source header are kept out; KPIs filtering on a column without values ("X by Y") are dropped | ✅ | `test_ai_ungrounded_lao_and_breakdown_kpis_rejected` |
+| `/ai-status` reports provider, model, reachability and missing model; UI pill shows it; long jobs polled up to an hour | ✅ | `test_ai_status_reports_ollama`, E2E |
+| Ollama service in docker-compose (+ one-shot model pull, optional GPU block) | ⚠️ written, **not executed** (no Docker) | `docker-compose.yml` |
+| Live DeepSeek / other OpenAI-compatible API | ⚠️ **not verified** — no credentials | |
+
+Defects found by the live runs and fixed: a fixed 32k context window made CPU inference exceed the 900 s timeout (now sized per request: 12k here); the 7B model once looped until the token limit and the retry re-sent the whole cut-off answer (now prevented by grammar bounds; retries start fresh).
+
+Test totals: **backend 127 passed** (100k benchmark: ingest 19.2 s · profile 0.4 s · workbook 8.9 s), **frontend 7 passed**, **E2E Phase 1 (238 formulas) + Phase 2 (246 formulas) passed**.
 
 Defects found and fixed during verification: merged group headers misclassified columns (the leaf header now wins); the upload screen flashed while the source list loaded and could swallow clicks (now gated on the loaded state); confidence bars reused the AI colour; "no blueprint yet" returned 404 (now `null`); stale labels after apply.
 

@@ -26,12 +26,29 @@ class Settings(BaseSettings):
     timezone: str = "Asia/Vientiane"
     admin_email: str | None = None
     admin_password: str | None = None
-    # AI
+    # AI — provider for Blueprint interpretation:
+    #   auto              Claude when ANTHROPIC_API_KEY is set, otherwise the local Ollama server
+    #   ollama            local open model served by Ollama (free, data stays on the server)
+    #   openai_compatible any /v1/chat/completions server (DeepSeek, OpenRouter, LM Studio, vLLM…)
+    #   anthropic         Claude
+    #   none              deterministic rules only
+    ai_provider: str = "auto"
     anthropic_api_key: str | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
     ai_model: str = "claude-opus-5-5"
     ai_effort: str = "medium"  # low | medium | high | xhigh | max
     ai_max_retries: int = 2  # extra attempts when the model's JSON fails validation
     ai_timeout_seconds: float = 180.0
+    ollama_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "qwen2.5:7b"
+    # upper bound for the context window; each request is sized to its prompt (a needlessly large
+    # window makes CPU inference several times slower; Ollama's small default would truncate)
+    ollama_num_ctx: int = 32768
+    ollama_num_predict: int = 6000  # output token budget per attempt
+    ollama_timeout_seconds: float = 900.0  # CPU-only servers are slow; this runs as a background job
+    openai_base_url: str | None = None  # e.g. https://api.deepseek.com/v1
+    openai_api_key: str | None = None
+    openai_model: str | None = None  # e.g. deepseek-chat
+    openai_json_mode: str = "schema"  # schema (json_schema response format) | object (json_object + schema in prompt)
     # send bounded, masked example values (samples, frequent values) to the AI; when false
     # only schema metadata and statistics leave the server
     ai_send_values: bool = True

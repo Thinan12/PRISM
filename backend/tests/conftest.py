@@ -16,6 +16,7 @@ os.environ.update({
     "PRISM_JOBS_MODE": "inline",
     "PRISM_SECRET_KEY": "test-secret-key-0123456789-abcdefghijklmnopqrstuvwxyz",
     "PRISM_AUTH_RATE_PER_MINUTE": "1000",
+    "PRISM_AI_PROVIDER": "none",  # tests never reach a real model; AI tests opt in with fakes
 })
 os.environ.pop("ANTHROPIC_API_KEY", None)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

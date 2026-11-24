@@ -26,7 +26,7 @@
 | Dataset storage | Parquet per dataset version (`raw.parquet` all-text + `clean.parquet` typed) |
 | Background jobs | DB-backed job queue (`jobs` table) polled by worker processes **(ADR-1)** |
 | Excel | openpyxl, A1-reference formulas (no structured refs) **(ADR-2)** |
-| AI | Anthropic Claude API, profile-only payloads, strict Pydantic Blueprints, rule-based fallback |
+| AI | Pluggable provider: local Ollama (default without a key), any OpenAI-compatible API, or Claude; profile-only payloads, strict Pydantic Blueprints, rule-based fallback |
 | Frontend | React 18 + TypeScript + Vite, Framer Motion, TanStack Query |
 | Deploy | Docker Compose, Caddy reverse proxy; only 80/443 exposed |
 
@@ -76,7 +76,7 @@ proposals) and is validated before use.
 | `ingestion/typing.py` | per-column type inference + conversion with failure tracking |
 | `profiling/` | column/dataset profiles and quality issues |
 | `excel/builder.py` | workbook generation (README, Data, Summary, Data Quality, Lookups, Analysis, Source copies) |
-| `blueprint/` | Phase 2: `schema` (Pydantic Blueprint), `rules` (deterministic generator), `ai` (Claude interpreter), `merge` (validate AI against data), `kpi` (KPI → DuckDB SQL), `executor` (approved ops → new version), `service` (lifecycle) |
+| `blueprint/` | Phase 2: `schema` (Pydantic Blueprint), `rules` (deterministic generator), `ai` (provider-neutral interpreter: Ollama / OpenAI-compatible / Claude), `merge` (validate AI against data), `kpi` (KPI → DuckDB SQL), `executor` (approved ops → new version), `service` (lifecycle) |
 | `services/` | orchestration: ingest pipeline, storage, audit |
 | `api/` | REST routers (`/api/v1`) |
 | `worker.py` | job runner |
@@ -106,7 +106,7 @@ they are stored in the version's lineage and written to an *Excluded Rows* sheet
 ```
 current dataset versions ─▶ rules engine (always) ──────────────┐
           │                                                       ▼
-          └─▶ profile-only payload ─▶ Claude (JSON schema) ─▶ Pydantic ─▶ merge: validate vs data ─▶ Blueprint (draft)
+          └─▶ profile-only payload ─▶ AI provider (JSON schema) ─▶ Pydantic ─▶ merge: validate vs data ─▶ Blueprint (draft)
                  (bounded, masked)       retry if invalid          │ failure / refusal / no key → rules only (reason recorded)
                                                                    ▼
           user edits (approve / reject / rename / remove / modify / add KPI) ─▶ apply job
@@ -114,14 +114,24 @@ current dataset versions ─▶ rules engine (always) ────────�
           approved ops only ─▶ new dataset versions (lineage) ─▶ KPIs re-evaluated (DuckDB) ─▶ workbook (KPIs + Blueprint sheets)
 ```
 
-**ADR-3 — the AI proposes, the data disposes.** Claude (default `claude-opus-5-5`, effort `medium`,
-structured outputs, server-side refusal fallback) only *interprets*; its output schema contains no
+**ADR-3 — the AI proposes, the data disposes.** The model only *interprets*; its output schema contains no
 numbers that PRISM reports. Every proposal is re-checked: unknown columns and values are dropped,
 KPIs must compile to valid SQL for the column types, value mappings must reference existing values,
 and relationships are kept only when PRISM measures at least 50 % value overlap. Each drop is
 recorded as a warning on the Blueprint. Any AI failure falls back to the deterministic rules engine,
 so PRISM works without a key. `PRISM_AI_SEND_VALUES=false` restricts the payload to schema and
 statistics; phone numbers are always masked.
+
+**ADR-5 — the AI provider is pluggable; local is the default.** `PRISM_AI_PROVIDER` selects
+`ollama` (a free open model on the company server — data never leaves it), `openai_compatible`
+(DeepSeek, OpenRouter, LM Studio, vLLM…), `anthropic` (Claude `claude-opus-5-5`, structured
+outputs, server-side fallback) or `none`; `auto` (default) uses Claude when `ANTHROPIC_API_KEY`
+is set and Ollama otherwise. Every provider gets the same system prompt and JSON schema (Ollama
+and strict OpenAI-style servers constrain decoding to it), the same Pydantic validation with
+error-feedback retries, and the same validation against the data, so a weaker local model can
+lower the *quality* of suggestions but not the correctness of anything PRISM reports. Trade-off:
+small local models on CPU are slow (minutes) and less insightful than Claude; the provider can be
+switched per deployment without code changes. Image-table transcription still requires Claude.
 
 **ADR-4 — KPIs are declarative.** A KPI is `{aggregation, column, filter}` — never free SQL — compiled
 to parameterized DuckDB SQL (identifiers quoted from validated keys, values bound as parameters) and

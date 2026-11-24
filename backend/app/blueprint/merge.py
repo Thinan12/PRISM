@@ -8,6 +8,8 @@ duplicate counts, measured overlaps) always come from PRISM, never from the mode
 
 from __future__ import annotations
 
+import re
+
 from app.blueprint.ai import AIInterpretation
 from app.blueprint.context import DatasetContext
 from app.blueprint.kpi import KpiInvalid, natural_format, validate_kpi
@@ -25,6 +27,17 @@ from app.blueprint.schema import (
     Relationship,
     ValueMapping,
 )
+
+
+_LAO_RUN = re.compile(r"[຀-໿]+")  # Lao Unicode block
+
+
+def ungrounded_lao(name: str, *sources: str | None) -> list[str]:
+    """Lao words in an AI-proposed name that do not occur in the source header text. Models
+    (especially small local ones) can produce plausible-looking but wrong Lao; PRISM only accepts
+    Lao text that the data itself contains."""
+    src = " ".join(s for s in sources if s)
+    return [w for w in _LAO_RUN.findall(name) if w not in src]
 
 
 def _clamp(x: float) -> float:
@@ -66,6 +79,11 @@ def merge_ai(bp: Blueprint, ai: AIInterpretation, contexts: list[DatasetContext]
                 warnings.append(f"AI described unknown column '{ac.key}'; ignored.")
                 continue
             name = " ".join(ac.display_name.split())[:80] or cp.display_name
+            bad = ungrounded_lao(name, cp.original_label, cp.display_name)
+            if bad:
+                warnings.append(f"AI name '{name}' for '{cp.display_name}' kept out: Lao text "
+                                f"{', '.join(repr(b) for b in bad)} does not appear in the source header.")
+                name = cp.display_name
             cp.display_name = name
             cp.description = ac.description[:400]
             cp.semantic_role = ac.semantic_role
@@ -86,6 +104,10 @@ def merge_ai(bp: Blueprint, ai: AIInterpretation, contexts: list[DatasetContext]
         # KPIs
         existing = {(k.aggregation, k.column, tuple(k.filter.values) if k.filter else None) for k in plan.kpis}
         for i, ak in enumerate(ads.kpis[:12], start=1):
+            if ak.filter_column and not ak.filter_values:
+                warnings.append(f"AI KPI '{ak.name}' dropped: it filters on '{ak.filter_column}' without values; "
+                                "a KPI is one number — breakdowns belong in dashboard panels.")
+                continue
             flt = Filter(column=ak.filter_column, values=ak.filter_values) if ak.filter_column and ak.filter_values else None
             k = Kpi(id=f"k{ds_id}-ai{i}", name=ak.name.strip()[:80] or f"KPI {i}", description=ak.description[:300],
                     aggregation=ak.aggregation, column=ak.column if ak.aggregation != Aggregation.count_rows else None,

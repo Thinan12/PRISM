@@ -9,9 +9,8 @@ from sqlalchemy import select
 
 from app.api.deps import WorkspaceCtx, client_ip, editor, viewer
 from app.api.sources import JobOut, _get_source, job_out
-from app.blueprint.ai import ai_configured
+from app.blueprint import ai as ai_mod
 from app.blueprint.service import Edit, edit_blueprint, get_record
-from app.core.config import get_settings
 from app.core.errors import Conflict, IngestionError
 from app.db.models import BlueprintRecord
 from app.services.audit import audit
@@ -43,8 +42,11 @@ class EditsIn(BaseModel):
 
 
 class AIStatus(BaseModel):
-    configured: bool
+    provider: str
     model: str
+    configured: bool
+    reachable: bool | None = None
+    detail: str | None = None
 
 
 def out(rec: BlueprintRecord) -> BlueprintOut:
@@ -55,7 +57,7 @@ def out(rec: BlueprintRecord) -> BlueprintOut:
 
 @router.get("/ai-status", response_model=AIStatus, summary="Whether AI interpretation is configured")
 def ai_status(ctx: WorkspaceCtx = Depends(viewer)) -> AIStatus:
-    return AIStatus(configured=ai_configured(), model=get_settings().ai_model)
+    return AIStatus(**ai_mod.status())
 
 
 @router.post("/sources/{source_id}/blueprints", response_model=JobOut, status_code=202, summary="Generate a Blueprint (AI with rule-based fallback)")

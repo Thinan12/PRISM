@@ -172,9 +172,14 @@ export function BlueprintView({ ws, source, canEdit }: { ws: number; source: Sou
   if (isLoading) return <div className="faint" style={{ padding: 24 }}>Loading blueprint…</div>;
   if (error) return <div className="error-box" style={{ margin: 16 }}>{(error as Error).message}</div>;
 
-  const aiPill = ai.data?.configured
-    ? <span className="pill pill-nebula"><span className="dot" />AI: {ai.data.model}</span>
-    : <span className="pill"><span className="dot" />AI not configured — deterministic rules</span>;
+  const st = ai.data;
+  const aiReady = !!st?.configured && st.reachable !== false && !st.detail;
+  const aiName = st ? `${st.model}${st.provider === "ollama" ? " (local)" : ""}` : "";
+  const aiPill = aiReady
+    ? <span className="pill pill-nebula"><span className="dot" />AI: {aiName}</span>
+    : st?.configured
+      ? <span className="pill pill-ember" title={st.detail ?? ""}><span className="dot" />AI unavailable — {st.detail}; deterministic rules will be used</span>
+      : <span className="pill"><span className="dot" />AI off — deterministic rules</span>;
 
   if (!rec || generate.isPending) {
     return (
@@ -184,7 +189,8 @@ export function BlueprintView({ ws, source, canEdit }: { ws: number; source: Sou
             <div>
               <PrismMark size={64} animate={!reduce} />
               <h2 className="display">Interpreting {source.filename}</h2>
-              <p className="dim">Profiles only are analysed{ai.data?.configured ? " by Claude" : ""}; every proposal is checked against the data.</p>
+              <p className="dim">Profiles only are analysed{aiReady ? ` by ${aiName}` : ""}; every proposal is checked against the data.</p>
+              {aiReady && st?.provider === "ollama" && <p className="faint" style={{ fontSize: 13 }}>Local models can take several minutes on a server without a GPU.</p>}
             </div>
           </div>
         ) : (
