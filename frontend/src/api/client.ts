@@ -87,3 +87,24 @@ export async function downloadFile(path: string, filename: string): Promise<void
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+/** POST a JSON body and save the response as a file (authenticated; e.g. dashboard exports). */
+export async function downloadPost(path: string, json: unknown, filename: string): Promise<void> {
+  const token = getToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`/api/v1${path}`, { method: "POST", headers, body: JSON.stringify(json) });
+  if (!res.ok) throw new ApiError(res.status, "download_failed", "Export failed.");
+  saveBlob(await res.blob(), filename);
+}
+
+export function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

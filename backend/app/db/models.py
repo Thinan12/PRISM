@@ -144,6 +144,45 @@ class BlueprintRecord(TimestampMixin, Base):
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
 
 
+class DashboardRecord(TimestampMixin, Base):
+    """An editable dashboard over the datasets of one source. ``content`` holds panels (each a
+    validated QuerySpec + chart + layout) and the filter bar; ``revision`` guards concurrent edits."""
+
+    __tablename__ = "dashboards"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    origin: Mapped[str] = mapped_column(String(16))  # blueprint | rules | user
+    content: Mapped[dict[str, Any]] = mapped_column(JSONType)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class QuestionRecord(TimestampMixin, Base):
+    """A natural-language question, how it was interpreted, and the verified result."""
+
+    __tablename__ = "questions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"), index=True)
+    dataset_version: Mapped[int] = mapped_column(Integer)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    question: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default="queued")  # queued | answered | unanswerable | failed
+    engine: Mapped[str | None] = mapped_column(String(16), nullable=True)  # ai | rules
+    model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    spec: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    chart: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    fallback_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class Job(TimestampMixin, Base):
     __tablename__ = "jobs"
     __table_args__ = (Index("ix_jobs_status_created", "status", "created_at"),)

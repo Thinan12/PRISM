@@ -1,4 +1,4 @@
-import type { ColumnMeta, LogicalType } from "../api/types";
+import type { ColumnMeta, LogicalType, ResultColumn } from "../api/types";
 
 export const TZ = "Asia/Vientiane";
 
@@ -101,4 +101,54 @@ export function fmtKpi(k: { value: number | null; format: "number" | "lak" | "du
     default:
       return Number.isInteger(k.value) ? fmtInt(k.value) : fmtNumber(k.value);
   }
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** A period label for a time-grain value ("2025-03-01" + month → "Mar 2025"). */
+export function fmtPeriod(v: unknown, grain: string | null | undefined): string {
+  if (v === null || v === undefined) return "(no date)";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v));
+  if (!m) return String(v);
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), m[3]];
+  switch (grain) {
+    case "month":
+      return `${MONTHS[mo - 1]} ${y}`;
+    case "quarter":
+      return `Q${Math.floor((mo - 1) / 3) + 1} ${y}`;
+    case "year":
+      return String(y);
+    case "week":
+      return `wk ${m[1]}-${m[2]}-${d}`;
+    default:
+      return `${m[1]}-${m[2]}-${d}`;
+  }
+}
+
+/** Format one query-result value by its column format (same rules as the server's answer text). */
+export function fmtResult(v: unknown, col: Pick<ResultColumn, "format" | "grain">): string {
+  if (v === null || v === undefined) return "(blank)";
+  if (col.grain) return fmtPeriod(v, col.grain);
+  switch (col.format) {
+    case "lak":
+      return fmtLAK(Number(v));
+    case "duration":
+      return fmtDuration(Number(v)).replace(/^0:/, "");
+    case "percent":
+      return `${(Number(v) * 100).toFixed(1)}%`;
+    case "date":
+      return fmtDate(String(v), true);
+    case "boolean":
+      return v ? "Yes" : "No";
+    case "number":
+      return Number.isInteger(Number(v)) ? fmtInt(Number(v)) : fmtNumber(Number(v));
+    default:
+      return String(v);
+  }
+}
+
+export function fmtChangePct(v: unknown): string {
+  if (v === null || v === undefined) return "—";
+  const n = Number(v) * 100;
+  return `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(1)}%`;
 }

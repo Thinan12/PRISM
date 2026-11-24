@@ -12,6 +12,8 @@ Managed by Alembic (`backend/alembic`). The database holds metadata only; datase
 | `dataset_versions` | dataset_id + version (unique), row_count, columns / profile / lineage (JSON), clean_path, raw_path, content_hash | immutable |
 | `artifacts` | workspace_id, source_id, kind, filename, storage_path, sha256, meta | generated workbooks |
 | `blueprints` | workspace_id, source_id + number (unique), status (draft / applied / superseded), engine (rules / ai), content (JSON), requirements, applied_at / applied_by, result | editable only while draft |
+| `dashboards` | workspace_id, source_id, name, origin (blueprint / rules / user), content (panels + filters JSON), revision | edits are revision-checked |
+| `questions` | workspace_id, dataset_id, dataset_version, user_id, question, status, engine, model, spec, chart, answer, notes, result, fallback_reason, error | results keep the SQL and at most 1,000 rows |
 | `jobs` | type, status, payload / result (JSON), attempts, progress, timestamps | queue (`SKIP LOCKED` on PostgreSQL) |
 | `audit_events` | at, workspace_id, actor_id, action, target, details, ip | append-only |
 

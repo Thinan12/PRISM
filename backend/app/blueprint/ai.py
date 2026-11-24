@@ -18,7 +18,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -341,27 +341,28 @@ def status() -> dict[str, Any]:
     return out
 
 
-# array caps for grammar-constrained (local) decoding; None = number of columns in the payload
-_ARRAY_CAPS: dict[str, int | None] = {
-    "columns": None, "exclude_columns": None, "kpis": 8, "value_mappings": 10, "variants": 10,
-    "filter_values": 10, "relationships": 10, "dashboard": 6, "kpi_names": 8, "assumptions": 8,
+# array caps for grammar-constrained (local) decoding of the Blueprint interpretation
+_ARRAY_CAPS: dict[str, int] = {
+    "kpis": 8, "value_mappings": 10, "variants": 10, "filter_values": 10, "relationships": 10,
+    "dashboard": 6, "kpi_names": 8, "assumptions": 8,
 }
 _STRING_CAPS = {"display_name": 60, "title": 80, "label": 80, "key": 80, "column": 80, "dataset_ref": 20}
 _DEFAULT_STRING_CAP = 240
 
 
-def bounded_schema(schema: dict[str, Any], n_datasets: int, max_columns: int) -> dict[str, Any]:
-    """Inline refs and add maxItems/maxLength, so a grammar-constrained decoder cannot run away
-    (small local models otherwise sometimes repeat items until the token limit)."""
+def bounded_schema(schema: dict[str, Any], array_caps: dict[str, int], string_caps: dict[str, int] | None = None,
+                   default_array: int = 20, default_string: int = _DEFAULT_STRING_CAP) -> dict[str, Any]:
+    """Inline refs and add maxItems/maxLength (by property name), so a grammar-constrained decoder
+    cannot run away (small local models otherwise sometimes repeat items until the token limit)."""
     out = _inline_refs(schema)
+    string_caps = string_caps or {}
 
     def walk(node: Any, name: str | None) -> None:
         if isinstance(node, dict):
             if node.get("type") == "array" and name:
-                cap = n_datasets if name == "datasets" else _ARRAY_CAPS.get(name, 20)
-                node["maxItems"] = max(1, cap if cap is not None else max_columns)
+                node["maxItems"] = max(1, array_caps.get(name, default_array))
             if node.get("type") == "string" and "enum" not in node:
-                node["maxLength"] = _STRING_CAPS.get(name or "", _DEFAULT_STRING_CAP)
+                node["maxLength"] = string_caps.get(name or "", default_string)
             if "anyOf" in node:
                 for v in node["anyOf"]:
                     walk(v, name)
@@ -369,7 +370,6 @@ def bounded_schema(schema: dict[str, Any], n_datasets: int, max_columns: int) ->
                 walk(v, k)
             if "items" in node:
                 walk(node["items"], name)
-        return None
 
     walk(out, None)
     return out
@@ -391,7 +391,15 @@ def _inline_refs(schema: dict[str, Any]) -> dict[str, Any]:
     return walk(schema)
 
 
-def _anthropic_call(client: Any, messages: list[dict[str, Any]], schema: dict[str, Any]) -> _Reply:
+@dataclass
+class _Request:
+    system: str
+    schema: dict[str, Any]  # structured-outputs subset (api_schema)
+    ollama_format: dict[str, Any]  # inlined + bounded variant for grammar-constrained decoding
+    name: str = "prism_output"
+
+
+def _anthropic_call(client: Any, req: _Request, messages: list[dict[str, Any]]) -> _Reply:
     import anthropic
 
     s = get_settings()
@@ -399,9 +407,9 @@ def _anthropic_call(client: Any, messages: list[dict[str, Any]], schema: dict[st
         resp = client.beta.messages.create(
             model=s.ai_model,
             max_tokens=16000,
-            system=SYSTEM,
+            system=req.system,
             messages=messages,
-            output_config={"format": {"type": "json_schema", "schema": schema}, "effort": s.ai_effort},
+            output_config={"format": {"type": "json_schema", "schema": req.schema}, "effort": s.ai_effort},
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
         )
@@ -462,35 +470,22 @@ def _http_post(url: str, body: dict[str, Any], headers: dict[str, str], timeout:
         raise AIUnavailable(f"{service} returned a non-JSON response.") from e
 
 
-def ollama_context_size(messages: list[dict[str, Any]], num_predict: int, maximum: int) -> int:
+def ollama_context_size(messages: list[dict[str, Any]], num_predict: int, maximum: int, system: str = SYSTEM) -> int:
     """Smallest 4096-multiple window holding the prompt plus the output budget (bounded by ``maximum``).
     Prompt tokens are over-estimated at 1 token per 2.5 characters (Lao script tokenizes densely)."""
-    chars = len(SYSTEM) + sum(len(m["content"]) if isinstance(m["content"], str) else len(json.dumps(m["content"]))
+    chars = len(system) + sum(len(m["content"]) if isinstance(m["content"], str) else len(json.dumps(m["content"]))
                               for m in messages)
     need = int(chars / 2.5) + num_predict + 512
     return max(4096, min(maximum, -(-need // 4096) * 4096))
 
 
-PAYLOAD_MARKER = "\n\nPROFILES:\n"
-
-
-def _payload_shape(messages: list[dict[str, Any]]) -> tuple[int, int]:
-    """(datasets, max columns) of the payload in the first user message."""
-    try:
-        data = json.loads(messages[0]["content"].split(PAYLOAD_MARKER, 1)[1])
-        ds = data["datasets"]
-        return len(ds), max(len(d["columns"]) for d in ds)
-    except Exception:  # noqa: BLE001 - only used to tighten bounds
-        return 20, 200
-
-
-def _ollama_call(messages: list[dict[str, Any]], schema: dict[str, Any]) -> _Reply:
+def _ollama_call(req: _Request, messages: list[dict[str, Any]]) -> _Reply:
     s = get_settings()
-    num_ctx = ollama_context_size(messages, s.ollama_num_predict, s.ollama_num_ctx)
+    num_ctx = ollama_context_size(messages, s.ollama_num_predict, s.ollama_num_ctx, req.system)
     body = {
         "model": s.ollama_model,
-        "messages": [{"role": "system", "content": SYSTEM}, *messages],
-        "format": bounded_schema(schema, *_payload_shape(messages)),  # Ollama constrains decoding to this schema
+        "messages": [{"role": "system", "content": req.system}, *messages],
+        "format": req.ollama_format,  # Ollama constrains decoding to this schema
         "stream": False,
         "options": {"temperature": 0, "num_ctx": num_ctx, "num_predict": s.ollama_num_predict},
     }
@@ -501,14 +496,14 @@ def _ollama_call(messages: list[dict[str, Any]], schema: dict[str, Any]) -> _Rep
                   assistant_message={"role": "assistant", "content": text})
 
 
-def _openai_call(messages: list[dict[str, Any]], schema: dict[str, Any]) -> _Reply:
+def _openai_call(req: _Request, messages: list[dict[str, Any]]) -> _Reply:
     s = get_settings()
-    system = SYSTEM
+    system = req.system
     if s.openai_json_mode == "object":
         fmt: dict[str, Any] = {"type": "json_object"}
-        system += "\n\nReturn ONLY a JSON object that conforms to this JSON schema:\n" + json.dumps(_inline_refs(schema))
+        system += "\n\nReturn ONLY a JSON object that conforms to this JSON schema:\n" + json.dumps(_inline_refs(req.schema))
     else:
-        fmt = {"type": "json_schema", "json_schema": {"name": "prism_interpretation", "strict": True, "schema": schema}}
+        fmt = {"type": "json_schema", "json_schema": {"name": req.name, "strict": True, "schema": req.schema}}
     body = {"model": s.openai_model, "messages": [{"role": "system", "content": system}, *messages],
             "response_format": fmt, "temperature": 0, "max_tokens": 8000}
     headers = {"Authorization": f"Bearer {s.openai_api_key}"} if s.openai_api_key else {}
@@ -534,40 +529,57 @@ def _strip_fences(text: str) -> str:
     return t
 
 
-def interpret(payload: dict[str, Any], max_attempts: int | None = None) -> AIResult:
-    """Ask the configured model for a schema-valid interpretation, or raise AIUnavailable."""
+M = TypeVar("M", bound=BaseModel)
+
+
+@dataclass
+class Structured(Generic[M]):
+    value: M
+    model: str
+    attempts: int
+    input_tokens: int
+    output_tokens: int
+
+
+def structured_call(system: str, content: str, out_model: type[M], *, array_caps: dict[str, int] | None = None,
+                    string_caps: dict[str, int] | None = None, check: Callable[[M], None] | None = None,
+                    max_attempts: int | None = None, name: str = "prism_output") -> Structured[M]:
+    """Ask the configured provider for JSON matching ``out_model``; validate it (Pydantic, then the
+    optional semantic ``check``, which raises ValueError) and retry with the error as feedback.
+    Raises AIUnavailable when no valid answer is obtained."""
     s = get_settings()
     reason = not_configured_reason()
     if reason:
         raise AIUnavailable(reason + ".")
     p = provider()
+    schema = api_schema(out_model)
+    req = _Request(system=system, schema=schema, name=name,
+                   ollama_format=bounded_schema(schema, array_caps or {}, string_caps))
     if p == "anthropic":
         client = client_factory()
-        call: Callable[[list[dict[str, Any]], dict[str, Any]], _Reply] = lambda m, sc: _anthropic_call(client, m, sc)
+        call: Callable[[_Request, list[dict[str, Any]]], _Reply] = lambda r, m: _anthropic_call(client, r, m)
     else:
         call = {"ollama": _ollama_call, "openai_compatible": _openai_call}[p]
     attempts = max_attempts or (s.ai_max_retries + 1)
-    first = {
-        "role": "user",
-        "content": "Interpret these dataset profiles and return the JSON interpretation." + PAYLOAD_MARKER
-                   + json.dumps(payload, ensure_ascii=False, default=str),
-    }
+    first = {"role": "user", "content": content}
     messages: list[dict[str, Any]] = [first]
-    schema = api_schema()
     # stop retrying once one provider timeout's worth of wall-clock time has been spent
     budget = s.ollama_timeout_seconds if p == "ollama" else s.ai_timeout_seconds
     started = time.monotonic()
     tokens_in = tokens_out = 0
     last_error = "unknown error"
+    attempt = 0
     for attempt in range(1, attempts + 1):
-        reply = call(messages, schema)
+        reply = call(req, messages)
         tokens_in += reply.input_tokens
         tokens_out += reply.output_tokens
         try:
             if reply.truncated:
                 raise ValueError("output was cut off at the token limit")
-            interp = AIInterpretation.model_validate(json.loads(_strip_fences(reply.text)))
-            return AIResult(interp, reply.model, attempt, tokens_in, tokens_out)
+            value = out_model.model_validate(json.loads(_strip_fences(reply.text)))
+            if check is not None:
+                check(value)
+            return Structured(value, reply.model, attempt, tokens_in, tokens_out)
         except (json.JSONDecodeError, ValidationError, ValueError) as e:
             last_error = str(e)[:2000]
             log.warning("ai_output_invalid", provider=p, attempt=attempt, error=last_error[:300])
@@ -584,3 +596,19 @@ def interpret(payload: dict[str, Any], max_attempts: int | None = None) -> AIRes
                 {"role": "user", "content": f"Your output was invalid: {last_error}\nReturn the complete corrected JSON object."},
             ]
     raise AIUnavailable(f"AI output failed validation after {attempt} attempt(s): {last_error[:300]}")
+
+
+def interpret(payload: dict[str, Any], max_attempts: int | None = None) -> AIResult:
+    """Blueprint interpretation of dataset profiles, or AIUnavailable."""
+    datasets = payload.get("datasets") or []
+    caps = dict(_ARRAY_CAPS)
+    caps["datasets"] = max(1, len(datasets))
+    caps["columns"] = caps["exclude_columns"] = max([len(d.get("columns", [])) for d in datasets] or [1])
+    res = structured_call(
+        SYSTEM,
+        "Interpret these dataset profiles and return the JSON interpretation.\n\nPROFILES:\n"
+        + json.dumps(payload, ensure_ascii=False, default=str),
+        AIInterpretation, array_caps=caps, string_caps=_STRING_CAPS, max_attempts=max_attempts,
+        name="prism_interpretation",
+    )
+    return AIResult(res.value, res.model, res.attempts, res.input_tokens, res.output_tokens)

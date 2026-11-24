@@ -77,6 +77,7 @@ proposals) and is validated before use.
 | `profiling/` | column/dataset profiles and quality issues |
 | `excel/builder.py` | workbook generation (README, Data, Summary, Data Quality, Lookups, Analysis, Source copies) |
 | `blueprint/` | Phase 2: `schema` (Pydantic Blueprint), `rules` (deterministic generator), `ai` (provider-neutral interpreter: Ollama / OpenAI-compatible / Claude), `merge` (validate AI against data), `kpi` (KPI → DuckDB SQL), `executor` (approved ops → new version), `service` (lifecycle) |
+| `analytics/` | Phase 3: `spec` (declarative QuerySpec), `engine` (validate → parameterized DuckDB SQL → result with provenance; trends, rankings, shares, robust-z anomalies), `nl` (questions → spec: AI or bilingual rule parser; answer text written from results), `dashboard` (generation from the Blueprint plan, filters, cross-filters, insights, Excel export), `service` (question jobs, dashboard lifecycle) |
 | `services/` | orchestration: ingest pipeline, storage, audit |
 | `api/` | REST routers (`/api/v1`) |
 | `worker.py` | job runner |
@@ -88,6 +89,8 @@ proposals) and is validated before use.
 - `datasets` — one per detected table; belongs to workspace + source
 - `dataset_versions` — immutable: version no, schema (columns), profile, quality, lineage, parquet paths
 - `blueprints` — per source, numbered; status draft → applied | superseded; engine rules | ai; full Blueprint JSON
+- `dashboards` — per source: name, origin (blueprint | rules | user), panels + filters JSON, revision (optimistic concurrency)
+- `questions` — question text, interpreter (ai | rules), validated spec, chart, PRISM-written answer, result with SQL, dataset version
 - `jobs` — type, status (queued|running|succeeded|failed), payload, result, error, attempts
 - `artifacts` — generated files (workbooks) linked to dataset version
 - `audit_events` — actor, workspace, action, target, details, timestamp
@@ -141,6 +144,44 @@ checks each formula against the DuckDB value.
 Operations (`map_values`, `remove_duplicate_rows`, `exclude_column`, `cast_column`) run only when
 approved, in a fixed order, and produce a new immutable dataset version; removed rows are listed in
 lineage and earlier versions stay readable.
+
+## 3b. Analytics and dashboards (Phase 3)
+
+```
+question (Lao / English) ─▶ AI provider or rule parser ─▶ QuerySpec ─▶ validate against schema + values
+        ─▶ compile: parameterized DuckDB SQL (+ literal display form) ─▶ execute on one immutable version
+        ─▶ result rows + SQL + version + matched rows ─▶ answer sentence written by PRISM from the rows
+dashboard panel = title + chart + QuerySpec;  filters / cross-filters = extra conditions merged into each panel's spec
+```
+
+**ADR-6 — nobody submits SQL.** Users, the UI and the AI all produce a declarative `QuerySpec`
+(measures, up to two groupings with time grains, conditions, sort, limit, analysis ∈ change | share |
+anomaly). The engine validates it against the dataset (column types, aggregations, *text filter values
+must exist in the data*), compiles it with identifiers taken only from validated column keys and every
+value bound as a parameter, and runs it in an in-process DuckDB with external access disabled. The
+displayed SQL is the executed statement with literals inlined, so it can be re-run independently (the
+API tests do exactly that). Raw SQL input is intentionally not offered.
+
+**ADR-7 — the answer is written by PRISM, not the model.** The model (or the rule parser) only maps
+words to the schema; once the spec is validated and executed, `compose_answer` builds the sentence from
+the result rows. A model cannot put a number into an answer. Invalid specs are fed back to the model with
+the validation error for a bounded number of retries; any AI failure falls back to the rule parser and
+the fallback reason is shown.
+
+**ADR-8 — the deterministic parser is the AI's critic, and goes first with small local models.** A
+live run with `qwen2.5:7b` produced schema-valid queries that did not answer the question (a dropped
+"complaints" filter, a missing per-branch grouping, a sum of the row-number column). PRISM therefore
+(1) rejects sums/averages of identifier columns, (2) checks every AI query against what the rule parser
+can prove the question names — values found in the data, explicit groupings, time grains — and feeds any
+mismatch back to the model, and (3) with `PRISM_QUESTION_ENGINE=auto` asks a local Ollama model only when
+the rule parser cannot map the question (hosted models such as Claude or DeepSeek are asked first).
+
+Anomalies use a robust z-score per period: (x − median) / (1.4826·MAD), falling back to 1.2533·mean
+absolute deviation when MAD is 0; |z| ≥ 3.5 is flagged. For counts and sums, empty periods are generated
+as real zeros before scoring. Cross-filters exclude their source panel, so the clicked chart keeps its
+context while every other panel filters. Charts follow the data-viz method: categorical palette validated
+against the Hull surface, part-to-whole shown as a segmented bar (not a donut), and every chart has a
+table and SQL view.
 
 ## 4. Localization
 

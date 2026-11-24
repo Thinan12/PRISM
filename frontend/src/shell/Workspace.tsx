@@ -6,6 +6,7 @@ import { useRegenerate, useSources } from "../api/hooks";
 import type { Dataset, Source } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { CommandPalette, type Command } from "../components/CommandPalette";
+import { AnalyticsView } from "../components/analytics/AnalyticsView";
 import { BlueprintView } from "../components/BlueprintView";
 import { DataPreview } from "../components/DataPreview";
 import { Inspector } from "../components/Inspector";
@@ -16,7 +17,7 @@ import { SourceExplorer, StatusPill } from "../components/SourceExplorer";
 import { UploadPanel } from "../components/UploadPanel";
 import { fmtBytes, fmtInt } from "../lib/format";
 
-type Tab = "map" | "blueprint" | "data" | "quality";
+type Tab = "map" | "blueprint" | "analytics" | "data" | "quality";
 
 export function Workspace() {
   const { user, logout } = useAuth();
@@ -30,6 +31,7 @@ export function Workspace() {
   const [selection, setSelection] = useState<Selection>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [askFocus, setAskFocus] = useState(0);
   const regenerate = useRegenerate(wsId);
   const reduce = useReducedMotion();
 
@@ -87,6 +89,10 @@ export function Workspace() {
     if (source) {
       cmds.push({ id: "t-map", group: "View", label: "Schema Map", run: () => setTab("map") });
       cmds.push({ id: "t-bp", group: "View", label: "Blueprint", run: () => setTab("blueprint") });
+      if (source.status === "ready") {
+        cmds.push({ id: "t-an", group: "View", label: "Analytics — dashboard", run: () => setTab("analytics") });
+        cmds.push({ id: "ask", group: "Actions", label: "Ask a question about the data", hint: "Lao · English", run: () => { setTab("analytics"); setAskFocus((n) => n + 1); } });
+      }
       if (datasets.length) {
         cmds.push({ id: "t-data", group: "View", label: "Data", run: () => setTab("data") });
         cmds.push({ id: "t-q", group: "View", label: "Quality", run: () => setTab("quality") });
@@ -154,7 +160,7 @@ export function Workspace() {
           <>
             {source.status === "ready" && (
               <div className="canvas-tabs" role="tablist">
-                {([["map", "Schema Map"], ["blueprint", "Blueprint"], ["data", "Data"], ["quality", "Quality"]] as [Tab, string][]).map(([k, l]) => (
+                {([["map", "Schema Map"], ["blueprint", "Blueprint"], ["analytics", "Analytics"], ["data", "Data"], ["quality", "Quality"]] as [Tab, string][]).map(([k, l]) => (
                   <button key={k} role="tab" className="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{l}</button>
                 ))}
                 {(tab === "data" || tab === "quality") && datasets.length > 1 && (
@@ -186,6 +192,7 @@ export function Workspace() {
               {source.status === "ready" && tab === "data" && activeDs && wsId && <DataPreview key={activeDs.id} ws={wsId} ds={activeDs} />}
               {source.status === "ready" && tab === "quality" && activeDs && <QualityView ds={activeDs} />}
               {source.status === "ready" && tab === "blueprint" && wsId && <BlueprintView key={source.id} ws={wsId} source={source} canEdit={canEdit} />}
+              {source.status === "ready" && tab === "analytics" && wsId && !dsLoading && <AnalyticsView key={source.id} ws={wsId} source={source} datasets={datasets} canEdit={canEdit} askFocus={askFocus} />}
             </div>
           </>
         ) : null}

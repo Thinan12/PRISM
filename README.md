@@ -2,7 +2,7 @@
 
 **Give PRISM any data. PRISM understands it, discovers what matters, structures it, calculates it, and turns it into actionable intelligence.**
 
-PRISM is a self-hosted, multi-user data intelligence platform. Upload a messy spreadsheet, CSV, JSON, PDF table or pasted text, including Lao-language call logs with merged headers, mixed date formats, ₭ amounts and call durations. PRISM detects the tables, types every column, profiles quality deterministically, and produces a professional Excel workbook whose every figure is a live formula checked against PRISM's own computation.
+PRISM is a self-hosted, multi-user data intelligence platform. Upload a messy spreadsheet, CSV, JSON, PDF table or pasted text, including Lao-language call logs with merged headers, mixed date formats, ₭ amounts and call durations. PRISM detects the tables, types every column, profiles quality deterministically, proposes an editable Blueprint, and produces a professional Excel workbook whose every figure is a live formula checked against PRISM's own computation. Ask questions in Lao or English and get answers with the exact SQL behind them; dashboards are generated from the Blueprint and can be filtered, cross-filtered, edited and exported.
 
 > The LLM is never the calculator. All numbers come from deterministic code (pandas/DuckDB) or from Excel formulas PRISM writes and verifies.
 

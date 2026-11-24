@@ -10,13 +10,14 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
-from app.api import auth, blueprints, datasets, sources
+from app.api import analytics, auth, blueprints, datasets, sources
 from app.core.config import get_settings
 from app.core.errors import PrismError
 from app.core.logging import configure_logging, log
 from app.core.security import hash_password
 from app.db.models import Base, Membership, User, Workspace
 from app.db.session import get_engine, get_sessionmaker
+from app.analytics import service as _analytics_handlers  # noqa: F401  (registers job handlers)
 from app.blueprint import service as _blueprint_handlers  # noqa: F401  (registers job handlers)
 from app.services import ingest as _ingest_handlers  # noqa: F401  (registers job handlers)
 from app.services.jobs import worker_loop
@@ -94,7 +95,7 @@ def create_app() -> FastAPI:
             c.execute(text("SELECT 1"))
         return {"status": "ok", "version": app.version}
 
-    for r in (auth.router, sources.router, datasets.router, blueprints.router):
+    for r in (auth.router, sources.router, datasets.router, blueprints.router, analytics.router):
         app.include_router(r, prefix="/api/v1")
     return app
 

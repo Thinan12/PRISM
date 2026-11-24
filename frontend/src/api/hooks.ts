@@ -1,6 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "./client";
-import type { BlueprintEdit, BlueprintRecord, Dataset, Job, Rows, Source } from "./types";
+import type {
+  ActiveFilter,
+  BlueprintEdit,
+  BlueprintRecord,
+  Dashboard,
+  DashboardContent,
+  Dataset,
+  FilterOption,
+  Insight,
+  Job,
+  PanelData,
+  Question,
+  Rows,
+  Source,
+} from "./types";
 
 const busy = (s?: Source) => s && (s.status === "pending" || s.status === "processing");
 
@@ -133,3 +147,90 @@ export type AiStatus = {
   reachable: boolean | null;
   detail: string | null;
 };
+
+// ---------------- Analytics ----------------
+
+export function useDashboards(ws: number | undefined, sourceId: number | undefined) {
+  return useQuery({
+    queryKey: ["dashboards", ws, sourceId],
+    queryFn: () => api<Dashboard[]>(`/workspaces/${ws}/sources/${sourceId}/dashboards`),
+    enabled: !!ws && !!sourceId,
+  });
+}
+
+export function useCreateDashboard(ws: number | undefined, sourceId: number | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name?: string) => api<Dashboard>(`/workspaces/${ws}/sources/${sourceId}/dashboards`, { method: "POST", json: { name: name ?? null } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["dashboards", ws, sourceId] }),
+  });
+}
+
+export function useSaveDashboard(ws: number | undefined, sourceId: number | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { id: number; revision: number; name?: string; content: DashboardContent }) =>
+      api<Dashboard>(`/workspaces/${ws}/dashboards/${v.id}`, { method: "PATCH", json: { revision: v.revision, name: v.name, content: v.content } }),
+    onSuccess: (d) => qc.setQueryData<Dashboard[]>(["dashboards", ws, sourceId], (old) => (old ?? []).map((x) => (x.id === d.id ? d : x))),
+  });
+}
+
+export function useDeleteDashboard(ws: number | undefined, sourceId: number | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api<void>(`/workspaces/${ws}/dashboards/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["dashboards", ws, sourceId] }),
+  });
+}
+
+export function useDashboardData(ws: number | undefined, d: Dashboard | undefined, filters: ActiveFilter[]) {
+  return useQuery({
+    queryKey: ["dash-data", ws, d?.id, d?.revision, JSON.stringify(filters)],
+    queryFn: () => api<{ panels: PanelData[] }>(`/workspaces/${ws}/dashboards/${d!.id}/data`, { method: "POST", json: { filters } }),
+    enabled: !!ws && !!d,
+    placeholderData: (prev) => prev,
+    staleTime: 30_000,
+  });
+}
+
+export function useFilterOptions(ws: number | undefined, d: Dashboard | undefined) {
+  return useQuery({
+    queryKey: ["dash-filters", ws, d?.id, d?.revision],
+    queryFn: () => api<FilterOption[]>(`/workspaces/${ws}/dashboards/${d!.id}/filter-options`),
+    enabled: !!ws && !!d,
+    staleTime: 60_000,
+  });
+}
+
+export function useInsights(ws: number | undefined, datasetId: number | undefined, version: number | undefined) {
+  return useQuery({
+    queryKey: ["insights", ws, datasetId, version],
+    queryFn: () => api<Insight[]>(`/workspaces/${ws}/datasets/${datasetId}/insights`),
+    enabled: !!ws && !!datasetId,
+    staleTime: 60_000,
+  });
+}
+
+export function useQuestions(ws: number | undefined, datasetId: number | undefined) {
+  return useQuery({
+    queryKey: ["questions", ws, datasetId],
+    queryFn: () => api<Question[]>(`/workspaces/${ws}/datasets/${datasetId}/questions?limit=12`),
+    enabled: !!ws && !!datasetId,
+  });
+}
+
+export function getQuestion(ws: number, id: number) {
+  return api<Question>(`/workspaces/${ws}/questions/${id}`);
+}
+
+export function useAsk(ws: number | undefined, datasetId: number | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { question: string; engine: "auto" | "rules" }) => {
+      const q = await api<Question>(`/workspaces/${ws}/datasets/${datasetId}/questions`, { method: "POST", json: v });
+      if (q.job) await waitForJob(ws!, q.job);
+      return getQuestion(ws!, q.id);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["questions", ws, datasetId] }),
+  });
+}

@@ -1,6 +1,6 @@
 # PRISM — Development Progress
 
-Last updated: 2026-11-24 (Phase 2 + pluggable AI provider). Status reflects what was **executed and verified**, not what exists as code.
+Last updated: 2026-11-24 (Phase 3). Status reflects what was **executed and verified**, not what exists as code.
 
 ## Phase 1 — Data Intelligence Foundation · ✅ complete (acceptance criterion met)
 
@@ -78,6 +78,33 @@ Test totals: **backend 127 passed** (100k benchmark: ingest 19.2 s · profile 0.
 
 Defects found and fixed during verification: merged group headers misclassified columns (the leaf header now wins); the upload screen flashed while the source list loaded and could swallow clicks (now gated on the loaded state); confidence bars reused the AI colour; "no blueprint yet" returned 404 (now `null`); stale labels after apply.
 
-## Phase 3 — Analytics and Dashboard Engine · planned
+## Phase 3 — Analytics and Dashboard Engine · ✅ complete (acceptance criterion met)
+
+**Acceptance:** a user can ask analytical questions about uploaded data and receive verified results, with the exact SQL available for inspection.
+**Verified by:** `e2e/test_phase3_e2e.py` (browser: English and Lao questions → answers checked against pandas → SQL view → generate dashboard → cross-filter → pin answer → edit → export; no horizontal overflow at 390 px) and `backend/tests/test_analytics.py`, `test_analytics_api.py` (the displayed SQL is re-executed independently and must reproduce the returned rows).
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Declarative QuerySpec → validated, parameterized DuckDB SQL (identifiers from validated keys, bound values, external access off); SQL shown = SQL executed | ✅ | `test_values_are_bound_not_interpolated`, `test_question_answered_with_verifiable_sql` |
+| KPI computation, rankings (top/bottom N), comparisons (value sets), filtered measures, shares of total | ✅ | `test_ranking_matches_pandas`, `test_filters_and_filtered_measures_match_pandas`, `test_share_is_of_all_groups_even_when_limited` |
+| Trend analysis: time grains (day … year) with period-over-period change (LAG) | ✅ | `test_trend_with_change_matches_pandas` |
+| Anomaly detection: robust z-score per period, empty periods filled as zeros, MAD-0 fallback | ✅ | `test_anomaly_detects_planted_spike`, `test_anomaly_on_sparse_series_uses_mean_deviation` |
+| Query provenance: dataset + version, matched/total rows, timing, plain-language description generated from the spec | ✅ | all analytics tests |
+| Natural-language questions — rule parser (Lao + English, value aliases such as complaints → ຮ້ອງຮຽນ, periods, thresholds); honest "cannot answer" | ✅ | `test_lao_question_with_value_filter`, `test_unanswerable_question_is_honest`, E2E |
+| Natural-language questions — AI interpreter (any provider): schema-bounded output, validation errors fed back, fallback to rules; answer text always written by PRISM from the rows | ✅ (mocked HTTP) | `test_ai_question_retries_on_invalid_query`, `test_ai_question_failure_falls_back_to_rules` |
+| Live AI question interpretation with local `qwen2.5:7b` (CPU) | ✅ after fixes | first live run: 3/3 queries schema-valid but **wrong** (dropped the complaints filter, no per-branch grouping, summed the row-number column). After ADR-8 (identifier guard, rule-parser grounding check fed back to the model, chronological time series, exact-date-filter check): 3/3 correct in 2–3 attempts, 19–43 s each. With `PRISM_QUESTION_ENGINE=auto` a local model is consulted only when the rule parser cannot map the question |
+| Dashboard generation from the applied Blueprint plan (or rules): KPI cards, trend, rankings, part-to-whole, unusual days, filter bar | ✅ | `test_dashboard_from_applied_blueprint`, `test_dashboard_lifecycle` |
+| Interactive filtering (date range, categories) and cross-filtering (click a bar/segment; source panel keeps context) | ✅ | `test_dashboard_lifecycle`, E2E (Records 61 → 13 for ປາກເຊ) |
+| Dashboard editing: rename, chart type, width, reorder, remove, pin answers; revision-checked (409), every panel re-validated (422) | ✅ | `test_dashboard_lifecycle`, E2E |
+| Export: Excel (summary + one sheet per panel with data, provenance and SQL), per-panel CSV | ✅ | `test_dashboard_lifecycle`, E2E |
+| Deterministic insights (trend, leader, mix, unusual days) each with SQL | ✅ | `test_insights_have_sql` |
+| Roles (viewers ask and view; editors create/edit), tenant isolation, audit (question.asked/answered with SQL, dashboard.created/updated/deleted/exported) | ✅ | API tests |
+| Charts: validated categorical palette on the Hull surface, proportional bars (checked in the browser), crosshair + keyboard on lines, table + SQL view for every chart | ✅ | `analytics.test.tsx`, E2E |
+| 100k-row analytics benchmark | ✅ | dashboard (9 panels) 0.43 s · 4 insights 0.21 s · question 0.07 s |
+
+Defects found during verification and fixed: bars were capped by the label space so different values drew equal lengths (now proportional; asserted in E2E); two answer cards were shown during the transition; the phone layout overflowed by 122 px (ask-bar selector, date filter); tab strip clipped on phones; line-chart end label collided with the axis; anomaly z-scores were undefined on sparse daily data (MAD = 0); the rule parser grouped by phone because a merged group header ("ການໂທ") was treated as a column name, read "10 minutes?" as seconds, and answered "how many agents" with a breakdown instead of a distinct count.
+
+Test totals: **backend 164 passed** (incl. 100k benchmarks: ingest 22.3 s · profile 0.4 s · workbook 9.1 s · analytics as above), **frontend 15 passed**, **E2E Phase 1 + 2 + 3 passed**.
+
 ## Phase 4 — Google Sheets Live Intelligence · planned
 ## Phase 5 — Enterprise System · planned (auth/roles/audit foundations already in place)

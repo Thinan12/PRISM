@@ -56,3 +56,31 @@ def test_100k_rows_pipeline_benchmark(capsys):
               f"({len(out) / 1e6:.1f} MB)")
     # generous ceilings so CI on modest hardware still catches regressions
     assert t1 - t0 < 120 and t2 - t1 < 60 and t3 - t2 < 120
+
+
+@pytest.mark.slow
+def test_100k_rows_analytics_benchmark(capsys):
+    from app.analytics.dashboard import evaluate, generate_content, insights
+    from app.analytics.engine import run_query
+    from app.analytics.nl import rules_parse
+    from app.blueprint.context import DatasetContext
+
+    t = ingest(_csv(N), "big.csv").tables[0]
+    ctx = DatasetContext(dataset_id=1, version=1, version_id=1, name=t.name, columns=t.columns, profile=profile_table(t),
+                         lineage=t.lineage, df=t.clean)
+    t0 = time.perf_counter()
+    content, _, notes = generate_content([ctx], None, 1)
+    t1 = time.perf_counter()
+    data = evaluate(content, {1: ctx}, [])
+    t2 = time.perf_counter()
+    found = insights(ctx)
+    t3 = time.perf_counter()
+    parsed = rules_parse("total ຄ່າໂທ by branch", ctx)
+    res = run_query(parsed.spec, ctx)
+    t4 = time.perf_counter()
+    assert len(content.panels) >= 4 and all(d.error is None for d in data), [d.error for d in data]
+    assert sum(r[1] for r in res.rows) == t.clean[next(c["key"] for c in t.columns if c.get("unit") == "LAK")].sum()
+    with capsys.disabled():
+        print(f"\n[benchmark] 100k rows analytics: dashboard plan {t1 - t0:.2f}s · {len(data)} panels {t2 - t1:.2f}s · "
+              f"{len(found)} insights {t3 - t2:.2f}s · question {t4 - t3:.2f}s")
+    assert t2 - t1 < 10 and t3 - t2 < 10 and t4 - t3 < 5

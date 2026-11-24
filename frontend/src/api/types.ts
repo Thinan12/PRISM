@@ -271,3 +271,124 @@ export interface BlueprintEdit {
   id?: string;
   changes?: Record<string, unknown>;
 }
+
+// ---------------- Phase 3: analytics ----------------
+
+export type Aggregation = "count_rows" | "count_distinct" | "sum" | "average" | "minimum" | "maximum" | "share_of_rows";
+export type CondOp = "eq" | "neq" | "in" | "not_in" | "gt" | "gte" | "lt" | "lte" | "between" | "contains" | "is_null" | "not_null";
+export type Scalar = string | number | boolean;
+export interface Condition {
+  column: string;
+  op: CondOp;
+  values: Scalar[];
+}
+export interface QuerySpec {
+  dataset_id: number;
+  measures: { aggregation: Aggregation; column?: string | null; filter?: Condition | null; label?: string | null }[];
+  dimensions: { column: string; grain?: "day" | "week" | "month" | "quarter" | "year" | null }[];
+  filters: Condition[];
+  sort?: { by: "measure" | "dimension"; index: number; direction: "asc" | "desc" } | null;
+  limit: number;
+  analysis: "none" | "change" | "share" | "anomaly";
+}
+export type ValueFormat = "number" | "lak" | "duration" | "percent" | "date" | "text" | "boolean";
+export interface ResultColumn {
+  key: string;
+  label: string;
+  kind: "dimension" | "measure" | "change" | "change_pct" | "share" | "typical" | "z" | "anomaly";
+  type: string;
+  format: ValueFormat;
+  grain: string | null;
+  column: string | null;
+}
+export interface QueryResult {
+  spec: QuerySpec;
+  description: string;
+  columns: ResultColumn[];
+  rows: unknown[][];
+  row_count: number;
+  truncated: boolean;
+  matched_rows: number;
+  total_rows: number;
+  sql: string;
+  dataset_id: number;
+  dataset_name: string;
+  dataset_version: number;
+  computed_at: string;
+  elapsed_ms: number;
+}
+export type ChartKind = "kpi_card" | "bar" | "line" | "donut" | "table";
+export interface DashPanel {
+  id: string;
+  title: string;
+  chart: ChartKind;
+  query: QuerySpec;
+  width: number;
+  note?: string | null;
+}
+export interface FilterDef {
+  dataset_id: number;
+  column: string;
+  label: string;
+}
+export interface DashboardContent {
+  panels: DashPanel[];
+  filters: FilterDef[];
+}
+export interface Dashboard {
+  id: number;
+  source_id: number;
+  name: string;
+  origin: "blueprint" | "rules" | "user";
+  revision: number;
+  content: DashboardContent;
+  created_at: string;
+  updated_at: string | null;
+  notes: string[];
+}
+export interface ActiveFilter {
+  dataset_id: number;
+  condition: Condition;
+  source_panel?: string | null;
+}
+export interface PanelData {
+  panel_id: string;
+  result: QueryResult | null;
+  summary: string | null;
+  error: string | null;
+}
+export interface FilterOption {
+  dataset_id: number;
+  column: string;
+  label: string;
+  type: LogicalType;
+  min?: string | number | null;
+  max?: string | number | null;
+  values?: { value: string; count: number }[];
+}
+export interface Question {
+  id: number;
+  dataset_id: number;
+  dataset_version: number;
+  question: string;
+  status: "queued" | "answered" | "unanswerable" | "failed";
+  engine: "ai" | "rules" | null;
+  model: string | null;
+  chart: ChartKind | null;
+  answer: string | null;
+  notes: string[] | null;
+  fallback_reason: string | null;
+  error: string | null;
+  spec: QuerySpec | null;
+  result: QueryResult | null;
+  created_at: string;
+  job?: Job | null;
+}
+export interface Insight {
+  kind: "trend" | "ranking" | "share" | "anomaly";
+  title: string;
+  text: string;
+  sql: string;
+  spec: QuerySpec;
+  dataset_version: number;
+}

@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str | None = None  # e.g. deepseek-chat
     openai_json_mode: str = "schema"  # schema (json_schema response format) | object (json_object + schema in prompt)
+    # natural-language questions: auto (rules first with Ollama, AI first with hosted models) | rules_first | ai_first
+    question_engine: str = "auto"
     # send bounded, masked example values (samples, frequent values) to the AI; when false
     # only schema metadata and statistics leave the server
     ai_send_values: bool = True

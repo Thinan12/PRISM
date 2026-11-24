@@ -7,6 +7,7 @@ import threading
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.analytics import service as _an_handlers  # noqa: F401  (registers job handlers)
 from app.blueprint import service as _bp_handlers  # noqa: F401  (registers job handlers)
 from app.services import ingest as _handlers  # noqa: F401  (registers job handlers)
 from app.services.jobs import worker_loop
